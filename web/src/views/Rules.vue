@@ -351,17 +351,15 @@
               <el-input v-model="wizardForm.name" placeholder="例如：我的网站负载均衡" />
             </el-form-item>
             
-            <!-- 自管标签行(EP 2.14.4 规避,同 ClusterModeCard 范式):el-radio-group
-                 会把组容器 DIV 注册为表单输入 id,label for 指向 DIV 触发 Firefox 告警 -->
-            <div class="mode-row" role="group" aria-label="协议">
-              <span class="mode-row-label"><span class="required-mark">*</span>协议</span>
-              <div class="mode-row-content">
-                <el-radio-group v-model="wizardForm.protocol">
-                  <el-radio value="http">HTTP</el-radio>
-                  <el-radio value="tcp">TCP</el-radio>
-                </el-radio-group>
-              </div>
-            </div>
+            <!-- 原生表单行（2026-10-11 用户裁定：对齐统一走 el-form-item，弃自管标签行
+                 ——后者曾因侧距与 el-form-item 不一致致 20px 漂移；radio-group 的 Firefox
+                 label-for 控制台告警为 EP 上游已知形态，非用户可见） -->
+            <el-form-item label="协议" required>
+              <el-radio-group v-model="wizardForm.protocol" aria-label="协议">
+                <el-radio value="http">HTTP</el-radio>
+                <el-radio value="tcp">TCP</el-radio>
+              </el-radio-group>
+            </el-form-item>
 
             <el-form-item label="域名" required v-if="wizardForm.protocol === 'http'" class="domain-item">
               <el-input v-model="wizardForm.domain" placeholder="例如：example.com, www.example.com" />
@@ -399,16 +397,13 @@
         <!-- Step 1: TLS 配置 (仅当启用 HTTPS 时显示) -->
         <div v-show="currentStep === WIZARD_STEP.TLS" class="step-content">
           <el-form :model="wizardForm" label-width="100px" v-if="wizardForm.enable_tls && wizardForm.protocol === 'http'">
-            <div class="mode-row" role="group" aria-label="证书来源">
-              <span class="mode-row-label">证书来源</span>
-              <div class="mode-row-content">
-                <el-radio-group v-model="wizardForm.tls_source" :disabled="isCurrentRuleLocked">
-                  <el-radio value="manual">手动上传</el-radio>
-                  <el-radio value="acme_dns">ACME + DNS 自动</el-radio>
-                </el-radio-group>
-                <div v-if="isCurrentRuleLocked" class="form-tip-line port-warning">证书申请中，暂不能修改证书来源</div>
-              </div>
-            </div>
+            <el-form-item label="证书来源">
+              <el-radio-group v-model="wizardForm.tls_source" :disabled="isCurrentRuleLocked" aria-label="证书来源">
+                <el-radio value="manual">手动上传</el-radio>
+                <el-radio value="acme_dns">ACME + DNS 自动</el-radio>
+              </el-radio-group>
+              <div v-if="isCurrentRuleLocked" class="form-tip-line port-warning">证书申请中，暂不能修改证书来源</div>
+            </el-form-item>
             <template v-if="wizardForm.tls_source === 'acme_dns'">
               <el-form-item label="DNS 配置">
                 <el-select v-model="wizardForm.acme_config_id" placeholder="选择 DNS 提供商配置" style="width: 100%;">
@@ -737,15 +732,12 @@
                   <span class="form-tip-inline">启用后，响应将被压缩传输以减少带宽</span>
                 </div>
               </el-form-item>
-              <div v-if="wizardForm.enable_compress" class="mode-row" role="group" aria-label="压缩方式">
-                <span class="mode-row-label">压缩方式</span>
-                <div class="mode-row-content">
-                  <el-radio-group v-model="compressType">
-                    <el-radio value="gzip">gzip</el-radio>
-                    <el-radio value="zstd">zstd（更快、压缩比更高，需客户端支持）</el-radio>
-                  </el-radio-group>
-                </div>
-              </div>
+              <el-form-item v-if="wizardForm.enable_compress" label="压缩方式">
+                <el-radio-group v-model="compressType" aria-label="压缩方式">
+                  <el-radio value="gzip">gzip</el-radio>
+                  <el-radio value="zstd">zstd（更快、压缩比更高，需客户端支持）</el-radio>
+                </el-radio-group>
+              </el-form-item>
 
               <el-divider content-position="left" class="compact-divider">动态上游</el-divider>
 
@@ -757,15 +749,12 @@
               </el-form-item>
 
               <template v-if="wizardForm.dynamic_dns">
-                <div class="mode-row" role="group" aria-label="协议栈">
-                  <span class="mode-row-label">协议栈</span>
-                  <div class="mode-row-content">
-                    <el-checkbox-group v-model="wizardForm.dns_family" style="width: 200px;">
-                      <el-checkbox value="ipv4">IPv4</el-checkbox>
-                      <el-checkbox value="ipv6">IPv6</el-checkbox>
-                    </el-checkbox-group>
-                  </div>
-                </div>
+                <el-form-item label="协议栈">
+                  <el-checkbox-group v-model="wizardForm.dns_family" style="width: 200px;" aria-label="协议栈">
+                    <el-checkbox value="ipv4">IPv4</el-checkbox>
+                    <el-checkbox value="ipv6">IPv6</el-checkbox>
+                  </el-checkbox-group>
+                </el-form-item>
               </template>
 
               <el-divider content-position="left" class="compact-divider">代理超时</el-divider>
@@ -3566,12 +3555,8 @@ onUnmounted(() => {
 .rules-pagination { display: flex; justify-content: flex-end; margin-top: 16px; }
 .polling-error-alert { margin-bottom: 16px; }
 /* .polling-error-title/.polling-error-meta 已收敛 main.css（FE-R2） */
-/* 自管标签行(EP 2.14.4 规避,同 ClusterModeCard 范式):复刻 EP
- * el-form-item 结构——.mode-row-label 宽度对齐本向导 label-width=100px */
-.mode-row { display: flex; margin-bottom: 18px; }
-.mode-row-label { width: 100px; flex-shrink: 0; height: 32px; line-height: 32px; text-align: right; padding-right: 12px; box-sizing: border-box; color: var(--el-text-color-regular); font-size: var(--el-form-label-font-size, 14px); }
-.mode-row-content { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
-.required-mark { color: var(--el-color-danger); margin-right: 4px; }
+/* .mode-row 自管标签行族已全量退役（2026-10-11 用户裁定：对齐统一走原生
+ * el-form-item）——.mode-row-label/.mode-row-content/.required-mark 死 CSS 一并删除 */
 /* .page-header/.header-left/.page-title/.title-icon/.page-desc 与
  * styles/main.css 全局定义逐字等价(字面值=对应 CSS 变量解析值),已删除 */
 

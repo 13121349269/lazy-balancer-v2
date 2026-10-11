@@ -1108,36 +1108,14 @@ func validateSnapshotACMEState(snapshot models.ClusterSnapshot) error {
 
 func insertSnapshotRules(ctx context.Context, tx *sql.Tx, rules []models.LbRule) error {
 	for _, rule := range rules {
-		// R59 C-F1：集群快照可能携带旧库/导入产生的越界 body 上限（写侧校验
-		// 之前落库的行），从节点应用时归一到 [0,4096]——与写侧/导入侧同边界，
-		// 防止渲染侧 int64 乘法回绕静默取消限制。负值→0（不限制）。
-		if rule.RequestBodyMaxSizeMB < 0 {
-			rule.RequestBodyMaxSizeMB = 0
-		} else if rule.RequestBodyMaxSizeMB > 4096 {
-			rule.RequestBodyMaxSizeMB = 4096
-		}
-		// R63 A-N1：跨版本快照防御——预 R62 主节点库中可能残留 tcp+enable_tls=1+
-		// 空证书死形态行（v1 导入旧缺陷）。从节点只读无触发路径，但「提升为主」
-		// 是 DB 事务、不重跑启动迁移，提升后到下次重启前该行任何编辑恒 400。
-		// 应用时归一（与 UpdateRule tcp 分支同语义），消除该窗口。
-		if rule.Protocol == "tcp" && rule.EnableTLS {
-			rule.EnableTLS = false
-			rule.TLSCert, rule.TLSKey = "", ""
-		}
-		// LBH-A-U1 同族（第 69 轮，主审裁定并入）：TCP 规则的 HTTP 专属死配置
-		// 字段族随快照应用归零——与 handlers/rules.go TCP 归一块同格。死值在从端
-		// 持久化会被「提升为主」（DB 事务不重跑启动迁移）继承。
-		if rule.Protocol == "tcp" {
-			rule.HostHeader = ""
-			rule.HealthCheckPath = ""
-			rule.EnableCompress = false
-			rule.CompressTypes = ""
-			rule.RequestBodyMaxSizeMB = 0
-			rule.UpstreamKeepaliveTimeout = 0
-			rule.ServerTokensHidden = 0
-		}
+		// 传输归一（单一事实源，2026-10-11）：与主端 snapshotRules 导出共用
+		// normalizeRuleForTransport（body 钳制[R59 C-F1]/TCP+TLS 死形态[R63 A-N1]/
+		// TCP 七字段[LBH-A-U1]）——三面（导出/从端落库/备份导入）同构是 rules
+		// 节哈希主从相等的不变量基础。第 69 轮两处平行手写块改一侧漏另一侧即
+		// 本次「分区滞后」永不自愈事故的根因。
+		normalizeRuleForTransport(&rule)
 		if _, err := tx.ExecContext(ctx, `INSERT INTO lb_rules (id,caddy_id,name,description,protocol,domain,listen_port,strategy,dynamic_dns,enable_dns_server,dns_server,dns_family,health_check_path,health_check_interval,health_check_timeout,health_check_unhealthy_threshold,health_check_healthy_threshold,enable_active_health_check,tcp_health_check_port,tcp_proxy_protocol,tcp_try_duration,tcp_try_interval,request_body_max_size_mb,upstream_keepalive_timeout,server_tokens_hidden,custom_routes_enabled,proxy_dial_timeout,proxy_response_header_timeout,proxy_read_timeout,proxy_write_timeout,proxy_stream_timeout,proxy_flush_interval,proxy_stream_close_delay,host_header,health_check_host,enable_tls,tls_source,acme_config_id,ca_provider_id,tls_cert,tls_key,tls_http_redirect,enable_compress,compress_types,enabled,log_enabled,created_by,updated_by,created_at,updated_at,block_page_stage1_id,block_page_stage1_status,block_page_stage3_id,block_page_stage3_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			rule.ID, rule.CaddyID, rule.Name, rule.Description, rule.Protocol, rule.Domain, rule.ListenPort, rule.Strategy, rule.DynamicDNS, rule.EnableDnsServer, rule.DnsServer, rule.DnsFamily, rule.HealthCheckPath, rule.HealthCheckInterval, rule.HealthCheckTimeout, rule.HealthCheckUnhealthyThreshold, rule.HealthCheckHealthyThreshold, rule.EnableActiveHealthCheck, rule.TCPHealthCheckPort, rule.TCPProxyProtocol, rule.TCPTryDuration, rule.TCPTryInterval, rule.RequestBodyMaxSizeMB, rule.UpstreamKeepaliveTimeout, rule.ServerTokensHidden, rule.CustomRoutesEnabled, rule.ProxyDialTimeout, rule.ProxyResponseHeaderTimeout, rule.ProxyReadTimeout, rule.ProxyWriteTimeout, rule.ProxyStreamTimeout, rule.ProxyFlushInterval, rule.ProxyStreamCloseDelay, rule.HostHeader, rule.HealthCheckHost, rule.EnableTLS, rule.TLSSource, rule.ACMEConfigID, rule.CAProviderID, rule.TLSCert, rule.TLSKey, rule.TLSHTTPRedirect, rule.EnableCompress, rule.CompressTypes, rule.Enabled, rule.LogEnabled, rule.CreatedBy, rule.UpdatedBy, rule.CreatedAt, nullableTime(rule.UpdatedAt.NullTime), rule.BlockPageStage1ID, rule.BlockPageStage1Status, rule.BlockPageStage3ID, rule.BlockPageStage3Status); err != nil {
+			rule.ID, rule.CaddyID, rule.Name, rule.Description, rule.Protocol, rule.Domain, rule.ListenPort, rule.Strategy, rule.DynamicDNS, rule.EnableDnsServer, rule.DnsServer, rule.DnsFamily, rule.HealthCheckPath, rule.HealthCheckInterval, rule.HealthCheckTimeout, rule.HealthCheckUnhealthyThreshold, rule.HealthCheckHealthyThreshold, rule.EnableActiveHealthCheck, rule.TCPHealthCheckPort, rule.TCPProxyProtocol, rule.TCPTryDuration, rule.TCPTryInterval, rule.RequestBodyMaxSizeMB, rule.UpstreamKeepaliveTimeout, rule.ServerTokensHidden, rule.CustomRoutesEnabled, rule.ProxyDialTimeout, rule.ProxyResponseHeaderTimeout, rule.ProxyReadTimeout, rule.ProxyWriteTimeout, rule.ProxyStreamTimeout, rule.ProxyFlushInterval, rule.ProxyStreamCloseDelay, rule.HostHeader, rule.HealthCheckHost, rule.EnableTLS, rule.TLSSource, rule.ACMEConfigID, rule.CAProviderID, rule.TLSCert, rule.TLSKey, rule.TLSHTTPRedirect, rule.EnableCompress, rule.CompressTypes, rule.Enabled, rule.LogEnabled, rule.CreatedBy, rule.UpdatedBy, rule.CreatedAt.UTC().Format("2006-01-02 15:04:05"), nullableTimeFlat(rule.UpdatedAt.NullTime), rule.BlockPageStage1ID, rule.BlockPageStage1Status, rule.BlockPageStage3ID, rule.BlockPageStage3Status); err != nil {
 			return fmt.Errorf("写入快照规则 %s: %w", rule.CaddyID, err)
 		}
 		for _, upstream := range rule.Upstreams {
@@ -1164,9 +1142,9 @@ func insertSnapshotPathRules(ctx context.Context, tx *sql.Tx, ruleID string, pat
 		}
 		var err error
 		if pathRule.ID > 0 {
-			_, err = tx.ExecContext(ctx, `INSERT INTO path_rules (id,rule_id,sort_order,match_type,path,upstream_path,upstreams_json,response_mode,response_status,response_body,response_content_type,redirect_to,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, pathRule.ID, ruleID, pathRule.SortOrder, pathRule.MatchType, pathRule.Path, pathRule.UpstreamPath, upstreamsJSON, pathRule.ResponseMode, pathRule.ResponseStatus, pathRule.ResponseBody, pathRule.ResponseContentType, pathRule.RedirectTo, pathRule.CreatedAt, nullableTime(pathRule.UpdatedAt))
+			_, err = tx.ExecContext(ctx, `INSERT INTO path_rules (id,rule_id,sort_order,match_type,path,upstream_path,upstreams_json,response_mode,response_status,response_body,response_content_type,redirect_to,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, pathRule.ID, ruleID, pathRule.SortOrder, pathRule.MatchType, pathRule.Path, pathRule.UpstreamPath, upstreamsJSON, pathRule.ResponseMode, pathRule.ResponseStatus, pathRule.ResponseBody, pathRule.ResponseContentType, pathRule.RedirectTo, pathRule.CreatedAt.UTC().Format("2006-01-02 15:04:05"), nullableTimeFlat(pathRule.UpdatedAt))
 		} else {
-			_, err = tx.ExecContext(ctx, `INSERT INTO path_rules (rule_id,sort_order,match_type,path,upstream_path,upstreams_json,response_mode,response_status,response_body,response_content_type,redirect_to,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`, ruleID, pathRule.SortOrder, pathRule.MatchType, pathRule.Path, pathRule.UpstreamPath, upstreamsJSON, pathRule.ResponseMode, pathRule.ResponseStatus, pathRule.ResponseBody, pathRule.ResponseContentType, pathRule.RedirectTo, pathRule.CreatedAt, nullableTime(pathRule.UpdatedAt))
+			_, err = tx.ExecContext(ctx, `INSERT INTO path_rules (rule_id,sort_order,match_type,path,upstream_path,upstreams_json,response_mode,response_status,response_body,response_content_type,redirect_to,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`, ruleID, pathRule.SortOrder, pathRule.MatchType, pathRule.Path, pathRule.UpstreamPath, upstreamsJSON, pathRule.ResponseMode, pathRule.ResponseStatus, pathRule.ResponseBody, pathRule.ResponseContentType, pathRule.RedirectTo, pathRule.CreatedAt.UTC().Format("2006-01-02 15:04:05"), nullableTimeFlat(pathRule.UpdatedAt))
 		}
 		if err != nil {
 			return fmt.Errorf("写入快照路径 %s: %w", pathRule.Path, err)
@@ -1288,6 +1266,17 @@ func nullableTime(value sql.NullTime) any {
 		return nil
 	}
 	return value.Time
+}
+
+// nullableTimeFlat（2026-10-11 时间戳格式统一）：从端落库时间统一 SQLite
+// 平面格式 'YYYY-MM-DD HH:MM:SS'（UTC）——此前直写 time.Time 由驱动序列化为
+// '+00:00' 后缀格式，与主端 datetime('now') 平面格式三态并存（时间戳同构
+// 迁移的写入侧终结点）。
+func nullableTimeFlat(value sql.NullTime) any {
+	if !value.Valid {
+		return nil
+	}
+	return value.Time.UTC().Format("2006-01-02 15:04:05")
 }
 
 // snapshotSecurityVersionRowsDiffer 比较快照携带的 CRS/IP2Region 版本行与

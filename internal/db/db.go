@@ -1490,6 +1490,15 @@ func runMigrations() error {
 		}
 	}
 
+	// 规则三面同构迁移（2026-10-11 用户裁定「如果没有就都应该没有/时间戳格式
+	// 统一」）：TCP 死值清零（bump cluster_version 触发从端下轮收敛）+ 时间戳
+	// 格式归一（RFC3339/+00:00/平面 三态并存 → SQLite 平面 UTC）。
+	if err := migrateTCPRuleDeadFields(); err != nil {
+		return err
+	}
+	if err := normalizeRuleTimestampsMigration(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -2974,4 +2983,50 @@ func ensureClusterAppliedSections() error {
 		applied_at DATETIME
 	)`)
 	return err
+}
+
+// normalizeRuleTimestampsMigration（2026-10-11 用户裁定「时间戳格式本来就应该
+// 统一」）：lb_rules/path_rules 的 created_at/updated_at 历史三种并存格式
+// （RFC3339 Z[旧版 Go 直写]/Go time +00:00[从端落库]/SQLite 平面[datetime('now')]）
+// 统一为 SQLite 平面格式（UTC 存储=audit 先例，展示层按配置时区转换）。
+// 幂等：平面格式行 strftime 后原样，LIKE 门只触达非平面行。
+func normalizeRuleTimestampsMigration() error {
+	for _, table := range []string{"lb_rules", "path_rules"} {
+		for _, col := range []string{"created_at", "updated_at"} {
+			if _, err := DB.Exec(`UPDATE ` + table + ` SET ` + col + `=strftime('%Y-%m-%d %H:%M:%S', ` + col + `)
+				WHERE ` + col + ` IS NOT NULL AND (` + col + ` LIKE '%T%' OR ` + col + ` LIKE '%+%')`); err != nil {
+				return fmt.Errorf("failed to normalize %s.%s timestamp format: %w", table, col, err)
+			}
+		}
+	}
+	return nil
+}
+
+// migrateTCPRuleDeadFields（2026-10-11 用户裁定「如果没有就都应该没有」）：
+// 主端存量 TCP 行的 HTTP 专属七字段死值清零——与 normalizeRuleForTransport
+// 传输归一同一清单。此前仅导出侧归一（CL10-P2-3「主端存储值不变」），用户
+// 裁定改为存储也归零：主端 DB、导出 canonical、从端落库三面同值，快照缓存
+// 的 canonical 变化由本迁移写侧触发 cluster_version bump 随下轮同步收敛。
+func migrateTCPRuleDeadFields() error {
+	res, err := DB.Exec(`UPDATE lb_rules SET
+		host_header='', health_check_path='', enable_compress=0, compress_types='',
+		request_body_max_size_mb=0, upstream_keepalive_timeout=0, server_tokens_hidden=0,
+		enable_tls=0, tls_cert='', tls_key=''
+		WHERE protocol='tcp' AND (
+			COALESCE(host_header,'')<>'' OR COALESCE(health_check_path,'')<>''
+			OR enable_compress=1 OR COALESCE(compress_types,'')<>''
+			OR request_body_max_size_mb<>0 OR upstream_keepalive_timeout<>0 OR server_tokens_hidden<>0
+			OR (enable_tls=1 AND (COALESCE(tls_cert,'')<>'' OR COALESCE(tls_key,'')<>''))
+		)`)
+	if err != nil {
+		return fmt.Errorf("failed to zero TCP dead fields: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		// 快照缓存随版本失效；bump 让从端下一轮拉到归一后 canonical，
+		// rules 节哈希两侧收敛（「分区滞后」自愈）。
+		if _, err := DB.Exec(`UPDATE global_config SET cluster_version=cluster_version+1 WHERE id=1`); err != nil {
+			return fmt.Errorf("failed to bump cluster_version after TCP dead-field cleanup: %w", err)
+		}
+	}
+	return nil
 }

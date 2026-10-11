@@ -269,19 +269,16 @@
             </el-button>
           </div>
         </el-form-item>
-        <!-- 自管标签行(EP 2.14.4 规避,同 ClusterModeCard 范式):el-radio-group
-             会把组容器 DIV 注册为表单输入 id,label for 指向 DIV 触发 Firefox 告警 -->
-        <div class="mode-row" role="group" aria-label="动作">
-          <span class="mode-row-label">动作</span>
-          <div class="mode-row-content">
-            <el-radio-group v-model="ruleForm.action">
-              <el-radio value="block">拦截</el-radio>
-              <el-radio value="log">仅记录</el-radio>
-              <el-radio value="pass">放行计分</el-radio>
-            </el-radio-group>
-            <div class="form-tip-line">拦截=命中即阻断；仅记录=只记录事件；放行计分=记录并向异常分累加（CRS 检测/拦截模式下由异常阈值统一裁决；仅自定义模式下只记录不拦截）</div>
-          </div>
-        </div>
+        <!-- 原生表单行（2026-10-11 用户裁定：对齐统一走 el-form-item；Firefox
+             label-for 控制台告警为 EP 上游已知形态，非用户可见） -->
+        <el-form-item label="动作">
+          <el-radio-group v-model="ruleForm.action" aria-label="动作">
+            <el-radio value="block">拦截</el-radio>
+            <el-radio value="log">仅记录</el-radio>
+            <el-radio value="pass">放行计分</el-radio>
+          </el-radio-group>
+          <div class="form-tip-line">拦截=命中即阻断；仅记录=只记录事件；放行计分=记录并向异常分累加（CRS 检测/拦截模式下由异常阈值统一裁决；仅自定义模式下只记录不拦截）</div>
+        </el-form-item>
         <el-form-item label="异常分值">
           <el-select v-model="ruleForm.score" style="width: 160px">
             <el-option :value="1" label="轻微（1）" />
@@ -1370,9 +1367,6 @@ onUnmounted(() => {
 /* 自管标签行(EP 2.14.4 规避,同 ClusterModeCard 范式):复刻 EP
  * .el-form-item__label 计算样式(右对齐/32px 行高/12px 右内边距),
  * 宽度对齐本弹框 label-width=80px */
-.mode-row { display: flex; margin-bottom: 18px; }
-.mode-row-label { width: 80px; flex-shrink: 0; height: 32px; line-height: 32px; text-align: right; padding-right: 12px; box-sizing: border-box; color: var(--el-text-color-regular); font-size: var(--el-form-label-font-size, 14px); }
-.mode-row-content { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 
 .crs-card :deep(.el-card__header) .crs-header { display: flex; justify-content: space-between; align-items: center; width: 100%; }
 .crs-card :deep(.el-card__header) .crs-header-title { display: flex; align-items: center; gap: 12px; }

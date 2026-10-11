@@ -2562,6 +2562,33 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, dataOK bo
 			return
 		}
 	}
+	// 规则三面同构（2026-10-11 用户裁定）：导入的 lb_rules 行在事务内做同款
+	// TCP 死值归零 + 时间戳平面格式归一——与 normalizeRuleForTransport 传输
+	// 归一/启动迁移同一清单（导出 dump 为 SELECT * 原样行，旧备份可携带死值
+	// 与 RFC3339/Go time 格式时间戳；不归一则导入后主端 DB 重新回到三态并存）。
+	if _, hasRules := backup.Tables["lb_rules"]; hasRules {
+		if _, err := tx.ExecContext(ctx, `UPDATE lb_rules SET
+			host_header='', health_check_path='', enable_compress=0, compress_types='',
+			request_body_max_size_mb=0, upstream_keepalive_timeout=0, server_tokens_hidden=0
+			WHERE protocol='tcp' AND (
+				COALESCE(host_header,'')<>'' OR COALESCE(health_check_path,'')<>''
+				OR enable_compress=1 OR COALESCE(compress_types,'')<>''
+				OR request_body_max_size_mb<>0 OR upstream_keepalive_timeout<>0 OR server_tokens_hidden<>0)`); err != nil {
+			err = session.abort(err)
+			recordAudit(c, action+"失败", "配置备份", "导入规则归一失败: "+err.Error())
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: action + "失败，已回滚"})
+			return
+		}
+		for _, col := range []string{"created_at", "updated_at"} {
+			if _, err := tx.ExecContext(ctx, `UPDATE lb_rules SET `+col+`=strftime('%Y-%m-%d %H:%M:%S', `+col+`)
+				WHERE `+col+` IS NOT NULL AND (`+col+` LIKE '%T%' OR `+col+` LIKE '%+%')`); err != nil {
+				err = session.abort(err)
+				recordAudit(c, action+"失败", "配置备份", "导入时间戳归一失败: "+err.Error())
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: action + "失败，已回滚"})
+				return
+			}
+		}
+	}
 
 	// K2-P2-03(第 2 轮审计):四态化启动迁移只覆盖启动路径——pre-v2.2.7 备份
 	// 导入 off+启用自定义规则的策略后静默失活(旧语义 off=自定义照常发射,

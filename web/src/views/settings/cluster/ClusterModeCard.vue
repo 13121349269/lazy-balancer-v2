@@ -15,16 +15,15 @@
            DIV——label 仅可指向表单控件,Firefox 报「Incorrect use of
            <label for=FORM_ELEMENT>」。改为自管标签行,语义等价零告警;
            120px 对齐与下方 el-form-item 一致。 -->
-      <div class="mode-row" role="group" aria-label="节点模式">
-        <span class="mode-row-label">节点模式</span>
-        <div class="mode-row-content">
-          <el-radio-group v-model="selectedMode" :disabled="loading || readOnly" aria-label="节点模式" @change="handleModeChange">
-            <el-radio value="master">主节点</el-radio>
-            <el-radio value="slave">从节点</el-radio>
-          </el-radio-group>
-          <div class="form-tip-line">主节点管理权威配置，从节点定期同步主节点数据</div>
-        </div>
-      </div>
+      <!-- 原生表单行（2026-10-11 用户裁定：对齐统一走 el-form-item，弃自管标签行；
+           Firefox label-for 控制台告警为 EP 上游已知形态，非用户可见） -->
+      <el-form-item label="节点模式">
+        <el-radio-group v-model="selectedMode" :disabled="loading || readOnly" aria-label="节点模式" @change="handleModeChange">
+          <el-radio value="master">主节点</el-radio>
+          <el-radio value="slave">从节点</el-radio>
+        </el-radio-group>
+        <div class="form-tip-line">主节点管理权威配置，从节点定期同步主节点数据</div>
+      </el-form-item>
 
       <el-form-item label="同步间隔">
         <div class="interval-row">
@@ -221,11 +220,8 @@ const submitRegistration = async (): Promise<void> => {
 
 .card-header { display: flex; align-items: center; }
 .card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: var(--text-primary); }
-.mode-row { display: flex; margin-bottom: 18px; }
 /* 复刻 EP .el-form-item__label 计算样式(右对齐/32px 行高/12px 右内边距),
  * 与下方「同步间隔」等 el-form-item 标签像素级一致(2026-09-19 用户报样式回归) */
-.mode-row-label { width: 120px; flex-shrink: 0; height: 32px; line-height: 32px; text-align: right; padding-right: 12px; box-sizing: border-box; color: var(--el-text-color-regular); font-size: var(--el-form-label-font-size, 14px); }
-.mode-row-content { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .interval-row { display: flex; align-items: center; gap: 8px; }
 
 @media (max-width: 768px) {

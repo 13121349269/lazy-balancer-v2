@@ -784,20 +784,11 @@ func (s *ClusterService) snapshotRules(ctx context.Context, store snapshotStore)
 			&rule.BlockPageStage1ID, &rule.BlockPageStage1Status, &rule.BlockPageStage3ID, &rule.BlockPageStage3Status); err != nil {
 			return nil, fmt.Errorf("扫描快照规则: %w", err)
 		}
-		// CL10-P2-3(第 10 轮审计):导出侧与从端 insertSnapshotRules 同口径
-		// 归一(R59 C-F1 body 钳 [0,4096]/R63 A-N1 tcp+TLS 死形态)——主端
-		// 存储值不变、仅导出值归一。此前主端原样导出 vs 从端归一落库,存量
-		// 越界/死形态行导致 rules 节哈希两侧永不相等,每版本 bump 永久重放
-		// 振荡(LB-04 收敛论证对 COALESCE 缺省成立、对钳制列不成立)。
-		if rule.RequestBodyMaxSizeMB < 0 {
-			rule.RequestBodyMaxSizeMB = 0
-		} else if rule.RequestBodyMaxSizeMB > 4096 {
-			rule.RequestBodyMaxSizeMB = 4096
-		}
-		if rule.Protocol == "tcp" && rule.EnableTLS {
-			rule.EnableTLS = false
-			rule.TLSCert, rule.TLSKey = "", ""
-		}
+		// 传输归一（单一事实源，2026-10-11）：body 钳制 + TCP 死形态 + TCP
+		// 七字段——导出侧与从端 insertSnapshotRules 共用 normalizeRuleForTransport。
+		// 第 69 轮事故：两处平行手写归一块改一侧漏另一侧，主从 canonical 不同形，
+		// 「分区滞后」在 304 稳态下永不自愈（CL10-P2-3 契约由单函数结构性保证）。
+		normalizeRuleForTransport(&rule)
 		rule.Upstreams = upstreamsByRule[rule.CaddyID]
 		if rule.Upstreams == nil {
 			rule.Upstreams = make([]models.Upstream, 0)
