@@ -361,9 +361,13 @@ const caddyPauseFilePath = "/tmp/lazy-balancer-caddy-paused"
 // 排水窗口内 1s 退避重绑 80/443，伪 Crash 噪音+排水语义被消解。
 // 与 stopCaddy（handlers/caddy.go）刻意不同：仅当文件不存在时写（不覆盖
 // stopCaddy 用户意图停机的在场标记）；写后即使排水请求失败也不回滚——本
-// 函数只在整个进程退出路径上调用，pause 粘滞无害（容器随 PID1 退出销毁
-// 可写层；非容器部署下次 startCaddy 会删标记），而 stopCaddy 是长驻运行期
-// 操作，停失败必须回滚让监督器继续看护。
+// 函数只在整个进程退出路径上调用，而 stopCaddy 是长驻运行期操作，停失败
+// 必须回滚让监督器继续看护。
+// pause 生命周期=容器运行期。注意：docker stop/start、restart 复用同一容器
+// 可写层，/tmp 并不清空（INFRA-A1-R1 事故：曾误假设「随容器重建清空」，导致
+// 重启后监督器开机 standby、Caddy 永不拉起）——跨重启残留由监督器启动首行
+// 清残兜底（docker-entrypoint.sh INFRA-A1-R1）；非容器部署下次 startCaddy
+// 亦会删标记。此处粘滞因此安全。
 func writeDrainPauseFile() {
 	if _, err := os.Stat(caddyPauseFilePath); err == nil {
 		return

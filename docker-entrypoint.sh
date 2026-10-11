@@ -57,6 +57,15 @@ fi
     echo "$LINE"
     echo "$LINE" >> "$APP_LOG" 2>/dev/null
   }
+  # INFRA-A1-R1（第 70 轮回归修复）：pause 生命周期=容器运行期。监督器启动即
+  # 代表容器新生命周期，此刻 pause 必为上一生命周期残留（docker stop/start、
+  # restart 复用同一容器可写层，/tmp 不清空——仅 compose 重建容器才清），
+  # 残留会让监督器开机即 standby、永不拉起 Caddy，startup 配置载入全部 refused。
+  # 运行期协议不受影响：监督器此时尚未进主循环，stopCaddy 建/startCaddy 删照旧。
+  if [ -f "$CADDY_PAUSE_FILE" ]; then
+    rm -f "$CADDY_PAUSE_FILE"
+    sup_log "Cleared stale pause marker from previous container life"
+  fi
   CRASHES=0
   FIRST_START=1  # V1（第 67 轮）：首启豁免——容器启动由 BootSync 权威载入，
   # 触发文件仅用于运行期 Caddy 崩溃自愈（否则启动载入审计/日志双行）
