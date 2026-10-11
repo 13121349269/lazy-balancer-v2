@@ -99,7 +99,9 @@ ENV APP_VERSION=${VERSION}
 # 升级源超出此版本时构建会失败提示，届时同步更新钉版值。
 # INFRA-71-3（第 71 轮）：移除 shadow——全仓（entrypoint/Dockerfile RUN 链/
 # docs/compose）无 useradd/usermod/groupadd 等调用，镜像内无消费方。
-RUN apk add --no-cache ca-certificates sqlite tzdata openssl=3.5.9-r0
+# zlib 钉版 1.3.2-r1（2026-10-12 用户裁定）：alpine 3.24.2 基础镜像快照携带 r0，
+# r1 为上游安全修复——沿 openssl 钉版先例显式升级（sqlite 依赖隐式装入 zlib）。
+RUN apk add --no-cache ca-certificates sqlite tzdata openssl=3.5.9-r0 zlib=1.3.2-r1
 WORKDIR /app
 
 COPY --from=xcaddy-builder /app/caddy /usr/local/bin/caddy
