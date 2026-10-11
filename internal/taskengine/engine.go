@@ -73,7 +73,6 @@ type Descriptor struct {
 	StatusFn   func() string    // 状态镜像
 	ToggleFn   func(bool) error // 调度开关 setter
 	ToggleName string
-	ManualRun  bool
 	Cancelable bool
 	RunsOn     Role
 	MasterOnly bool
@@ -323,15 +322,6 @@ func (e *Engine) Register(d Descriptor) error {
 	defer e.mu.Unlock()
 	e.regs[d.ID] = &registration{desc: d}
 	return nil
-}
-
-// SetManualRun 补设手动触发语义。
-func (e *Engine) SetManualRun(id string, ok bool) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if r, exist := e.regs[id]; exist {
-		r.desc.ManualRun = ok
-	}
 }
 
 func (e *Engine) Trigger(id, trigger, operator string) error {
@@ -949,7 +939,9 @@ func (e *Engine) Lookup(id string) (TaskMeta, bool) {
 	m := TaskMeta{
 		ID: id, Family: r.desc.Family, Name: r.desc.Name,
 		Description: r.desc.Description, Category: r.desc.Category, Kind: r.desc.Kind,
-		CanTrigger:   r.desc.ManualRun,
+		// 类型派生（2026-10-11 用户裁定，取代 ManualRun 白名单）：定时/循环/
+		// 触发均可手动调度；常驻族恒不可（启停语义，调度开关+重启承担）。
+		CanTrigger:   r.desc.Kind != KindDaemon,
 		Cancelable:   r.desc.Cancelable,
 		Toggleable:   r.desc.ToggleFn != nil,
 		ToggleName:   r.desc.ToggleName,
@@ -999,7 +991,7 @@ func (e *Engine) DescribeAll() []TaskMeta {
 		m := TaskMeta{
 			ID: s.id, Family: s.desc.Family, Name: s.desc.Name,
 			Description: s.desc.Description, Category: s.desc.Category, Kind: s.desc.Kind,
-			CanTrigger:   s.desc.ManualRun,
+			CanTrigger:   s.desc.Kind != KindDaemon,
 			Cancelable:   s.desc.Cancelable,
 			Toggleable:   s.desc.ToggleFn != nil,
 			ToggleName:   s.desc.ToggleName,
@@ -1046,6 +1038,51 @@ func (e *Engine) Stats24h(taskID string) TaskRunsStats {
 		COALESCE(SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END),0)
 		FROM task_runs WHERE task_id=? AND started_at > datetime(?, '-1 day')`, taskID, engineNowStr()).Scan(&st.Runs, &st.Success, &st.Fail)
 	return st
+}
+
+// TaskHourlyStat 24h 分小时桶（配置时区墙面小时——engineNowStr/CurrentLocation
+// 同基准，与 task_runs 存储串一致；时区基本原则 2026-10-11）。
+type TaskHourlyStat struct {
+	Hour    string `json:"hour"`
+	Success int    `json:"success"`
+	Failed  int    `json:"failed"`
+}
+
+// Stats24hHourlySeries 最近 24 个墙面小时的成功/失败计数（任务监控图表重构，
+// 2026-10-11 用户裁定方案 A：时间序列替代任务名柱状图，高频任务不再压制其他
+// 任务）。窗口=now-23h..now 逐小时升序 24 桶，空桶零填。
+func (e *Engine) Stats24hHourlySeries() []TaskHourlyStat {
+	loc := engineLocPtr()
+	curHour := time.Now().In(loc).Truncate(time.Hour)
+	out := make([]TaskHourlyStat, 24)
+	idx := map[string]int{}
+	for i := 0; i < 24; i++ {
+		h := curHour.Add(time.Duration(i-23) * time.Hour).Format("2006-01-02 15:04:05")
+		out[i].Hour = h
+		idx[h] = i
+	}
+	if db.DB == nil {
+		return out
+	}
+	rows, err := db.DB.Query(`SELECT strftime('%Y-%m-%d %H:00:00', started_at) AS h,
+		COALESCE(SUM(CASE WHEN status='success' THEN 1 ELSE 0 END),0),
+		COALESCE(SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END),0)
+		FROM task_runs WHERE started_at >= ? GROUP BY h`,
+		curHour.Add(-23*time.Hour).Format("2006-01-02 15:04:05"))
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var h string
+		var s, f int
+		if err := rows.Scan(&h, &s, &f); err == nil {
+			if i, ok := idx[h]; ok {
+				out[i].Success, out[i].Failed = s, f
+			}
+		}
+	}
+	return out
 }
 
 func (e *Engine) LatestRun(taskID string) *RunRecord {

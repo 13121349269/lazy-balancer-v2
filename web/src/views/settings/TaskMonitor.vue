@@ -49,7 +49,10 @@
               <el-button :icon="Refresh" circle size="small" :loading="refreshing" @click="refreshNow" title="立即刷新" />
             </div>
           </template>
-          <v-chart v-if="loaded" :option="statsBarOption" autoresize class="tm-chart" />
+          <!-- 数据就位后再挂载（vue-echarts 8 增量规划对「空 option 挂载→数据后到达」
+               的 series/legend 合并不稳——实证轴渲染而序列/图例缺失；挂载即完整
+               option 与独立 echarts 实证一致） -->
+          <v-chart v-if="loaded && series24h.length" :option="statsBarOption" :update-options="{ notMerge: true }" autoresize class="tm-chart" />
           <div v-else class="tm-chart tm-skeleton"></div>
         </el-card>
       </el-col>
@@ -174,7 +177,7 @@
               v-if="row.triggerable"
               link type="primary" size="small" :disabled="!canOperate || row.status === 'running'"
               @click="onTrigger(row)"
-            >立即执行</el-button>
+            >运行</el-button>
             <el-button
               v-if="row.cancellable && row.status === 'running'"
               link type="danger" size="small" :disabled="!canOperate"
@@ -205,7 +208,7 @@
     </el-card>
 
     <!-- 任务详情 -->
-    <el-dialog v-model="detailVisible" width="640px" top="8vh">
+    <el-dialog v-model="detailVisible" width="720px" top="8vh">
       <template #header>
         <DialogHeader
           :icon="detailIcon" :title="detailTask?.name || ''"
@@ -232,13 +235,13 @@
           <el-descriptions-item v-if="detailTask.last_run" label="开始时间">{{ fmtTime(detailTask.last_run.started_at) || '—' }}</el-descriptions-item>
           <el-descriptions-item v-if="detailTask.last_run" label="完成时间">{{ detailTask.status === 'running' ? '进行中' : fmtTime(detailTask.last_run.finished_at) || '—' }}</el-descriptions-item>
           <el-descriptions-item v-if="detailTask.last_run" label="耗时">{{ fmtDuration(detailTask.last_run.duration_ms) }}</el-descriptions-item>
-          <el-descriptions-item v-if="detailTask.last_run" label="触发 / 结果">{{ triggerLabel(detailTask.last_run.trigger) }} · {{ detailTask.last_run.operator || '系统' }} · <el-tag size="small" :type="resultTagType(detailTask.last_run.result)">{{ statusResultLabel(detailTask.last_run.result) }}</el-tag></el-descriptions-item>
+          <el-descriptions-item v-if="detailTask.last_run" label="触发 / 结果"><span class="tm-inline-flex">{{ triggerLabel(detailTask.last_run.trigger) }} · {{ detailTask.last_run.operator || '系统' }} · <el-tag size="small" :type="resultTagType(detailTask.last_run.result)">{{ statusResultLabel(detailTask.last_run.result) }}</el-tag></span></el-descriptions-item>
         </el-descriptions>
         <div v-if="detailTask.last_run?.message" class="tm-detail-msg">{{ detailTask.last_run.message }}</div>
         <template v-if="history.length">
           <div class="tm-detail-section">{{ historyTitle }}</div>
           <el-table :data="history" size="small" max-height="240" class="tm-nowrap-table">
-            <el-table-column prop="started_at" label="开始" width="160">
+            <el-table-column prop="started_at" label="开始" width="152">
               <template #default="{ row }">{{ fmtTime(row.started_at) }}</template>
             </el-table-column>
             <el-table-column prop="duration_ms" label="耗时" width="78">
@@ -247,7 +250,7 @@
             <el-table-column prop="trigger" label="触发" width="72">
               <template #default="{ row }">{{ triggerLabel(row.trigger) }}</template>
             </el-table-column>
-            <el-table-column label="操作者" width="90">
+            <el-table-column label="操作者" width="120" show-overflow-tooltip>
               <!-- operator 为空=自动/排程/启动等系统触发（后端 auto/startup/legacy 恒空） -->
               <template #default="{ row }">{{ row.operator || '系统' }}</template>
             </el-table-column>
@@ -256,7 +259,7 @@
                 <el-tag size="small" :type="resultTagType(row.status)">{{ statusResultLabel(row.status) }}</el-tag>
               </template>
             </el-table-column>
-            <el-table-column prop="message" label="信息" min-width="140" show-overflow-tooltip />
+            <el-table-column prop="message" label="信息" min-width="120" show-overflow-tooltip />
           </el-table>
         </template>
       </div>
@@ -290,14 +293,10 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
-import { use } from 'echarts/core'
-import { CanvasRenderer } from 'echarts/renderers'
-import { PieChart, BarChart } from 'echarts/charts'
-import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
+import '@/utils/echarts' // 统一注册（含 LineChart——直刷本页不再依赖先到 Dashboard）
 import type { EChartsOption } from 'echarts'
 import VChart from 'vue-echarts'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { formatDate } from '@/utils/date'
 import { Refresh, PieChart as PieChartIcon, DataLine, List, Monitor, Lock, Box, Timer } from '@element-plus/icons-vue'
 import { request } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
@@ -308,7 +307,6 @@ import DialogHeader from '@/components/DialogHeader.vue'
 import LogStorageBar from '@/components/LogStorageBar.vue'
 import type { APIResponse } from '@/types'
 
-use([CanvasRenderer, PieChart, BarChart, GridComponent, TooltipComponent, LegendComponent])
 
 interface TaskRunInfo { started_at: string; finished_at: string; duration_ms: number; trigger: string; operator?: string; result: string; message?: string }
 interface TaskInfo {
@@ -325,10 +323,14 @@ interface RunRecord {
   message?: string
 }
 
+// 24h 分小时桶（GET /system/tasks/stats-24h-series；配置时区墙面小时，后端已对齐）
+interface TaskHourlyStat { hour: string; success: number; failed: number }
+
 const authStore = useAuthStore()
 const isAdmin = computed(() => authStore.user?.role === 'admin')
 const tasks = ref<TaskInfo[]>([])
 const loaded = ref(false)
+const series24h = ref<TaskHourlyStat[]>([])
 const refreshing = ref(false)
 // L1-2（第 65 轮）：只读判定统一走全局 fail-closed 契约（authStore.
 // readOnlyReason===null=可写；曾本地 isSlave fetch-open 且不随角色切换刷新，
@@ -341,9 +343,13 @@ const fetchTasks = async () => {
   tasks.value = res.data?.tasks || []
   loaded.value = true
 }
+const fetchSeries = async () => {
+  const res = await request.get<APIResponse<{ series: TaskHourlyStat[] }>>('/system/tasks/stats-24h-series', { silent: true })
+  series24h.value = res.data?.series || []
+}
 const refreshNow = async () => {
   refreshing.value = true
-  try { await Promise.all([fetchTasks(), fetchCertQueue()]) } finally { refreshing.value = false }
+  try { await Promise.all([fetchTasks(), fetchSeries(), fetchCertQueue()]) } finally { refreshing.value = false }
 }
 onMounted(() => {
   void polling.run() // 首跑立即（start() 只设定时器；证书队列横幅已入轮询闭包随首跑）
@@ -353,7 +359,7 @@ onUnmounted(() => polling.stop())
 
 const polling = usePollingTask(async () => {
   // U5-P3-4：证书队列横幅与任务列表同频 10s（曾只在 mounted/手动刷新拉取，横幅最长陈旧一个会话）
-  await Promise.all([fetchTasks(), fetchCertQueue()])
+  await Promise.all([fetchTasks(), fetchSeries(), fetchCertQueue()])
 }, {
   interval: 10000,
   onError: (e) => console.error('task monitor poll failed:', e),
@@ -417,17 +423,22 @@ const statusPieOption = computed<EChartsOption>((): EChartsOption => {
     }],
   }
 })
+// 近 24 小时执行（成功/失败）——24h 分小时桶堆叠面积时间序列（2026-10-11
+// 用户裁定方案 A）：任务名柱状图被手动证书任务高频执行压扁其他任务；时间
+// 序列既消除频次压制，又新增「何时跑/何时挂」的分布信息。数据源
+// GET /system/tasks/stats-24h-series（配置时区墙面小时，24 桶升序零填）。
 const statsBarOption = computed<EChartsOption>((): EChartsOption => {
-  const rows = tasks.value.filter(t => (t.success_24h || t.fail_24h) > 0).slice(0, 10)
+  const buckets = series24h.value
   return {
-    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    animation: false,
+    tooltip: { trigger: 'axis' },
     legend: { top: 0, itemGap: 24 },
     grid: { left: 8, right: 12, top: 36, bottom: 8, containLabel: true },
-    xAxis: { type: 'category', data: rows.map(t => t.name.replace(/（.*）/, '')), axisLabel: { interval: 0, width: 72, overflow: 'truncate' } },
+    xAxis: { type: 'category', boundaryGap: false, data: buckets.map(b => b.hour.slice(11, 16)), axisLabel: { interval: 3 } },
     yAxis: { type: 'value', minInterval: 1 },
     series: [
-      { name: '成功', type: 'bar', data: rows.map(t => t.success_24h), itemStyle: { color: '#34d399', borderRadius: [4, 4, 0, 0] }, barMaxWidth: 14 },
-      { name: '失败', type: 'bar', data: rows.map(t => t.fail_24h), itemStyle: { color: '#f87171', borderRadius: [4, 4, 0, 0] }, barMaxWidth: 14 },
+      { name: '成功', type: 'line', stack: 'runs', smooth: true, symbol: 'none', areaStyle: { opacity: 0.35 }, data: buckets.map(b => b.success), itemStyle: { color: '#34d399' }, lineStyle: { color: '#34d399' } },
+      { name: '失败', type: 'line', stack: 'runs', smooth: true, symbol: 'none', areaStyle: { opacity: 0.35 }, data: buckets.map(b => b.failed), itemStyle: { color: '#f87171' }, lineStyle: { color: '#f87171' } },
     ],
   }
 })
@@ -572,9 +583,15 @@ const statusResultLabel = (r: string): string =>
 const resultTagType = (r: string): 'success' | 'danger' | 'info' | 'warning' =>
   r === 'success' || r === 'issued' ? 'success' : r === 'failed' ? 'danger' : r === 'cancelled' ? 'warning' : 'info'
 
-// FE-U5（第 69 轮）：委托 formatDate（配置时区单源）——此前 new Date 浏览器本地
-// 时区格式化，与全站口径分叉；非法串回退 formatDate 的 string-fallback 透传。
-const fmtTime = (s?: string) => formatDate(s)
+// 时间显示（时区基本原则 2026-10-11 用户重申）：task_runs 由引擎按**配置时区**
+// 写入无时区字符串（engineNowStr=CurrentLocation）——原样渲染即配置时区，禁止
+// 再作任何时区换算。FE-U5 曾委托 formatDate（其把无时区串强制按 UTC 解析再转
+// 配置时区），任务时间全部被 +8h 偏移（22:12→次日 06:12 实证）；formatDate 其余
+// 消费方（audit/cert_jobs/nodes 等 UTC 存储族）不受影响、保持原样。
+const fmtTime = (s?: string) => {
+  if (!s) return ''
+  return s.replace('T', ' ').replace(/\.\d+/g, '').replace(/Z$/, '')
+}
 const fmtDuration = (ms?: number) => {
   if (!ms || ms <= 0) return '—'
   if (ms < 1000) return `${ms}ms`
@@ -657,6 +674,7 @@ const fmtDuration = (ms?: number) => {
 .tm-detail-desc { font-size: 13px; color: var(--el-text-color-regular); line-height: 1.7; background: var(--el-fill-color-lighter); border-radius: 8px; padding: 10px 14px; }
 .tm-detail-descs :deep(.el-descriptions__label) { white-space: nowrap; }
 .tm-detail-descs :deep(.el-descriptions__content .el-tag) { vertical-align: middle; margin-left: 4px; }
+.tm-inline-flex { display: inline-flex; align-items: center; gap: 2px; }
 .tm-detail-msg { font-size: 12.5px; color: var(--el-text-color-secondary); }
 .tm-detail-section { font-size: 13px; font-weight: 600; color: var(--el-text-color-primary); margin-top: 4px; padding-top: 12px; border-top: 1px solid var(--el-border-color-lighter); }
 

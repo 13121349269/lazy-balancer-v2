@@ -77,36 +77,8 @@ func parseUTCSlot(s string) time.Time {
 	return time.Time{}
 }
 
-// slotCoveredByRun 排程槽是否已被一次执行覆盖（task_runs 存在 started_at≥槽
-// 的行——started_at 按配置时区落库，槽统一转同格式比较）。
-func slotCoveredByRun(taskID string, slot time.Time) bool {
-	if db.DB == nil || slot.IsZero() {
-		return false
-	}
-	var n int
-	_ = db.DB.QueryRow(`SELECT COUNT(*) FROM task_runs WHERE task_id=? AND started_at >= ?`,
-		taskID, slot.In(CurrentLocation()).Format("2006-01-02 15:04:05")).Scan(&n)
-	return n > 0
-}
-
-// coveredSlotStepPast 已覆盖的过去槽步进到排程配置的下一未来槽；未覆盖原样
-// 返回（停机追补保留）。U1-P2-2 修复：失败不推进 next_update（2026-09-25
-// 裁定保持）时引擎不重触发——感知在引擎侧，管理器与三钉测试零改动。
-func coveredSlotStepPast(taskID, table string, slot time.Time) time.Time {
-	if slot.IsZero() || slot.After(time.Now()) || !slotCoveredByRun(taskID, slot) {
-		return slot
-	}
-	days, hhmm := versionTableSchedule(table)
-	return NextScheduledSlot(time.Now(), days, hhmm, CurrentLocation())
-}
-
-func crsNextSlotAware() time.Time {
-	return coveredSlotStepPast("crs", "security_crs_version", parseUTCSlot(GetCRSUpdateManager().NextScheduledSlot()))
-}
-
-func ip2regionNextSlotAware() time.Time {
-	return coveredSlotStepPast("ip2region", "security_ip2region_version", parseUTCSlot(GetIP2RegionUpdateManager().NextScheduledSlot()))
-}
+// （coveredSlotStepPast/slotCoveredByRun/crsNextSlotAware/ip2regionNextSlotAware 已退役——
+// 排程槽生命周期 2026-10-11：失败落定落库推进，NextSlotFn 纯读库。）
 
 // InitTaskEngine 建引擎、恢复孤儿运行、注册全部 16 任务并启动默认循环。
 // TASK-L8（第 69 轮）：非幂等——调用方保证单次装配；重复调用前须先
@@ -404,7 +376,10 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 			if err := db.DB.QueryRow("SELECT COALESCE(auto_update,1) FROM security_crs_version WHERE id=1").Scan(&en); err != nil || en != 1 {
 				return time.Time{}
 			}
-			return coveredSlotStepPast("crs", "security_crs_version", parseUTCSlot(versionTableNextUpdate("security_crs_version")))
+			// 排程槽生命周期（2026-10-11 用户裁定）：纯读库——失败落定已由
+			// advanceSlotIfAuto 落库推进，不再存在待步进的过期被覆盖槽
+			//（coveredSlotStepPast 每 tick 重算永远领先 now 一步=零宽窗口停摆，已退役）。
+			return parseUTCSlot(versionTableNextUpdate("security_crs_version"))
 		},
 		EnabledFn: func() bool { // 业务开关联动展示（关=已暂停；DB 直读——manager 未初始化窗口也正确）
 			var en int
@@ -460,7 +435,7 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 			if err := db.DB.QueryRow("SELECT COALESCE(auto_update,1) FROM security_ip2region_version WHERE id=1").Scan(&en); err != nil || en != 1 {
 				return time.Time{}
 			}
-			return coveredSlotStepPast("ip2region", "security_ip2region_version", parseUTCSlot(versionTableNextUpdate("security_ip2region_version")))
+			return parseUTCSlot(versionTableNextUpdate("security_ip2region_version"))
 		},
 		EnabledFn: func() bool { // 业务开关联动展示（关=已暂停；DB 直读）
 			var en int
@@ -539,7 +514,6 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 		Description: "启动时从数据库装载运行态：规则库（CRS 种子/对账）→ 证书文件物化 → Caddy 配置渲染与应用（失败回退最后已知正确配置）。完成前面板不监听",
 		Category:    "系统",
 		Kind:        taskengine.KindOneshot,
-		ManualRun:   true,
 		BootSync:    true, // B1（第 65 轮后裁定）：启动执行=引擎同步触发（面板监听前完成）
 		Run: func(rc taskengine.RunContext) error {
 			// V1（第 67 轮）：caddy-restart=Caddy 崩溃自愈 watcher 经引擎调度
@@ -556,10 +530,9 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 
 	// ============ 手动触发语义 + 默认调度启动 ============
 
-	// 手动触发（定时/循环/触发允许；常驻无「立即执行」——启停即可）
-	for _, id := range []string{"threat", "crs", "ip2region", "auto-backup", "log-cleanup", "audit-retention", "security-events-retention", "cert-renewal-scan", "cert-reconcile", "cert-manual-poll", "cert-waiting-ca", "startup:config-load"} {
-		taskEngine.SetManualRun(id, true)
-	}
+	// 手动触发=类型派生（2026-10-11 用户裁定，取代 SetManualRun 白名单——
+	// config-watchdog 曾被白名单遗漏致循环任务无「运行」操作）：
+	// 定时/循环/触发均可手动调度；常驻族恒不可（启停即可，启停由调度开关+重启承担）。
 
 	// 默认调度启动：
 	// - 循环 8 个全启动（cert-waiting-ca 除外——默认关闭，续期扫描唤醒）

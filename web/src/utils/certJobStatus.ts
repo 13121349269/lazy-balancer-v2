@@ -55,6 +55,10 @@ export const certJobStatusLabel = (status: CertJobStatus): string => {
     case 'downloading': return '下载证书'
     case 'downloaded': return '下载完成'
     default:
+      // 空值/undefined 静默回退（存量行 status 空列的瞬时形态，非异常——
+      // 控制台噪音「Unknown cert job status: undefined」治理，2026-10-11）；
+      // 非空未知值仍 warn 暴露真实状态机漂移。
+      if (!status) return '未知'
       console.warn('Unknown cert job status:', status)
       return String(status)
   }

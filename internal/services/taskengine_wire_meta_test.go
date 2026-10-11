@@ -152,3 +152,17 @@ func TestTaskEngineWire_PeriodicIntervalAndScheduledSlotPresent(t *testing.T) {
 		t.Fatalf("scheduled tasks=%d, want 4（threat/crs/ip2region/auto-backup）", scheduled)
 	}
 }
+
+// 类型派生触发规则（2026-10-11 用户裁定，取代 ManualRun 白名单手段）：
+// CanTrigger 纯由任务类型派生——定时/循环/触发均可手动调度，常驻族恒不可
+// （启停语义，由调度开关+重启承担）。config-watchdog（循环）此前被白名单
+// 遗漏无「运行」操作，即白名单手段的结构性缺陷实例。
+func TestTaskEngineWire_canTriggerDerivedFromKind(t *testing.T) {
+	te := newWireTestEngine(t)
+	for _, m := range te.DescribeAll() {
+		want := m.Kind != "daemon"
+		if m.CanTrigger != want {
+			t.Fatalf("task %s (kind=%s) CanTrigger=%v, want %v（类型派生，非白名单）", m.ID, m.Kind, m.CanTrigger, want)
+		}
+	}
+}

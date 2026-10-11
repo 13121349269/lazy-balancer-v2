@@ -92,8 +92,7 @@ func TestSecurityUpdateEndpoints_conflictWhileInFlight(t *testing.T) {
 	release := make(chan struct{})
 	if err := te.Register(taskengine.Descriptor{
 		ID: "crs", Family: "security", Name: "CRS 规则库更新", Category: "安全防护",
-		Kind: taskengine.KindScheduled, RunsOn: taskengine.RoleMasterOnly, ManualRun: true,
-		NextSlotFn: func() time.Time { return time.Now().Add(24 * time.Hour) }, // 未来槽——调度器永不自动点火
+		Kind: taskengine.KindScheduled, RunsOn: taskengine.RoleMasterOnly, NextSlotFn: func() time.Time { return time.Now().Add(24 * time.Hour) }, // 未来槽——调度器永不自动点火
 		Run: func(rc taskengine.RunContext) error {
 			select {
 			case entered <- struct{}{}:

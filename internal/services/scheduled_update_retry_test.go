@@ -90,8 +90,9 @@ func TestCRSRun_inTaskRetry_exhaustedKeepsScheduleSlot(t *testing.T) {
 }
 
 // Given：调度 tick 到期启动的自动更新失败（fetch 恒失败）。
-// When：schedulerTick 完成整个生命周期。Then：next_update 保持 tick 预写的
-// 排程槽（rearm 失败退避重写已撤除——用户裁定下次更新=真实排程触发时间）。
+// When：schedulerTick 完成整个生命周期。Then：失败落定后 next_update 推进到
+// 紧邻下一排程槽（排程槽生命周期 2026-10-11 用户裁定——失败不推进的过期槽
+// 经步进重算永不到期，曾致排程停摆）。
 func TestCRSSchedulerTick_failedRunKeepsScheduleSlot(t *testing.T) {
 	overrideWafDirForTest(t)
 	stubUpdateRetrySleep(t)
@@ -101,7 +102,6 @@ func TestCRSSchedulerTick_failedRunKeepsScheduleSlot(t *testing.T) {
 	if _, err := db.DB.Exec(`UPDATE security_crs_version SET next_update=? WHERE id=1`, now.Add(-time.Minute).Format(crsTimeLayout)); err != nil {
 		t.Fatal(err)
 	}
-	want := versionTableNextSlot("security_crs_version", now)
 
 	m.fetchLatestTag = func(context.Context) (string, error) {
 		return "", errors.New("GitHub 返回 403")
@@ -126,8 +126,9 @@ func TestCRSSchedulerTick_failedRunKeepsScheduleSlot(t *testing.T) {
 	if status != "failed" {
 		t.Fatalf("status=%q, want failed", status)
 	}
-	if nextUpdate != want {
-		t.Fatalf("next_update=%q, want 保持 tick 预写排程槽 %q（退避重写已撤除）", nextUpdate, want)
+	wantReal := versionTableNextSlot("security_crs_version", time.Now().UTC())
+	if nextUpdate != wantReal {
+		t.Fatalf("next_update=%q, want 失败落定推进到紧邻下一排程槽 %q（排程槽生命周期 2026-10-11）", nextUpdate, wantReal)
 	}
 }
 
@@ -205,7 +206,7 @@ func TestThreatFailSource_nextUpdateIsScheduleSlot(t *testing.T) {
 	newClusterTestService(t)
 	want := threatNextSlot(time.Now().UTC())
 
-	failSourceRow(1, time.Now().UTC().Format(crsTimeLayout), errors.New("HTTP 500"))
+	failSourceRow(1, time.Now().UTC().Format(crsTimeLayout), errors.New("HTTP 500"), "auto")
 
 	var next string
 	if err := db.DB.QueryRow(`SELECT COALESCE(next_update,'') FROM security_threat_sources WHERE id=1`).Scan(&next); err != nil {

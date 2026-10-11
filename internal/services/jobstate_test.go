@@ -199,7 +199,7 @@ func TestCertJobStatusWrites_useApprovedEntryPoints(t *testing.T) {
 		"services/jobstate.go":      {"transitionJob": true},
 		"services/certificates.go":  {"restoreCertJobsForRule": true, "CreateOrRequeueCertJobWithChange": true},
 		"services/cluster_apply.go": {"replaceSnapshotTx": true},
-		"handlers/certjobs.go":      {"RetryCertJob": true, "DeleteCertJob": true},
+		"handlers/certjobs.go":      {"RetryCertJob": true, "retryCertJobByID": true, "DeleteCertJob": true},
 		"handlers/rules.go":         {"UpdateRule": true, "EnableRule": true, "DisableRule": true, "retireCertJobsForDomain": true},
 	}
 	var violations []string

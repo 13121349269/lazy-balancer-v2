@@ -452,7 +452,7 @@ func (m *ThreatUpdateManager) updateOneSource(ctx context.Context, source threat
 	})
 	finished := time.Now().UTC().Format(crsTimeLayout)
 	if err != nil {
-		failSourceRow(source.id, finished, err)
+		failSourceRow(source.id, finished, err, trigger)
 		AppendThreatUpdateLog("ERROR", "failed", fmt.Sprintf("源 %s 更新失败: %v", source.name, err))
 		return false, true
 	}
@@ -479,7 +479,7 @@ func (m *ThreatUpdateManager) updateOneSource(ctx context.Context, source threat
 			Logf("info", "威胁情报库: 源 %s 原始哈希一致但 .iplist 文件缺失，执行落盘（升级引导）", source.name)
 		case listExists > 0:
 			AppendThreatUpdateLog("INFO", "unchanged", fmt.Sprintf("源 %s 名单内容未变化（原始内容哈希一致），跳过解析写入", source.name))
-			markSourceSuccess(source.id, len(entries), finished)
+			markSourceSuccess(source.id, len(entries), finished, trigger)
 			return false, false
 		}
 	}
@@ -488,7 +488,7 @@ func (m *ThreatUpdateManager) updateOneSource(ctx context.Context, source threat
 	merged := wafiplist.AggregateIPEntries(entries)
 	changed, werr := writeThreatSystemList(source.name, merged)
 	if werr != nil {
-		failSourceRow(source.id, finished, fmt.Errorf("写入内置名单失败: %w", werr))
+		failSourceRow(source.id, finished, fmt.Errorf("写入内置名单失败: %w", werr), trigger)
 		AppendThreatUpdateLog("ERROR", "failed", fmt.Sprintf("源 %s 写入名单失败: %v", source.name, werr))
 		return false, true
 	}
@@ -497,25 +497,26 @@ func (m *ThreatUpdateManager) updateOneSource(ctx context.Context, source threat
 	if !changed {
 		AppendThreatUpdateLog("INFO", "unchanged", fmt.Sprintf("源 %s 名单内容未变化（哈希一致），跳过写入", source.name))
 	}
-	markSourceSuccess(source.id, len(entries), finished, rawHash)
+	markSourceSuccess(source.id, len(entries), finished, trigger, rawHash)
 	return changed, false
 }
 
 // markSourceSuccess 源成功状态落库（版本/条数/退避清零/下一窗口 + 原始字节哈希）。
+// 排程槽生命周期（2026-10-11 用户裁定）：仅 auto 且现存槽空/过期才推进——手动不动预约。
 // rawHash 缺省=兼容旧调用形态【不写】raw_hash 列（第 55 轮 P3-1：无条件覆写
 // 空串曾使快路径自我失效——缺省时动态剔除该列，保留上次慢路径哈希）。
-func markSourceSuccess(id int, entryCount int, finished string, rawHash ...string) {
+func markSourceSuccess(id int, entryCount int, finished string, trigger string, rawHash ...string) {
 	version := time.Now().UTC().Format("2006.01.02")
 	next := threatNextSlot(time.Now().UTC())
 	if len(rawHash) > 0 {
-		if _, err := db.DB.Exec(`UPDATE security_threat_sources SET update_status='success', message='', entry_count=?, version=?, finished_at=?, next_update=?, consecutive_failures=0, raw_hash=?, updated_at=datetime('now') WHERE id=?`,
-			entryCount, version, finished, next, rawHash[0], id); err != nil {
+		if _, err := db.DB.Exec(`UPDATE security_threat_sources SET update_status='success', message='', entry_count=?, version=?, finished_at=?, next_update=IIF(?='auto' AND (COALESCE(next_update,'')='' OR next_update<=datetime('now')), ?, next_update), consecutive_failures=0, raw_hash=?, updated_at=datetime('now') WHERE id=?`,
+			entryCount, version, finished, trigger, next, rawHash[0], id); err != nil {
 			Logf("error", "威胁情报库: 更新源成功状态失败: %v", err)
 		}
 	} else {
 		// raw_hash 缺省（快路径内容未变）不覆写该列（第 55 轮 P3-1 修法）。
-		if _, err := db.DB.Exec(`UPDATE security_threat_sources SET update_status='success', message='', entry_count=?, version=?, finished_at=?, next_update=?, consecutive_failures=0, updated_at=datetime('now') WHERE id=?`,
-			entryCount, version, finished, next, id); err != nil {
+		if _, err := db.DB.Exec(`UPDATE security_threat_sources SET update_status='success', message='', entry_count=?, version=?, finished_at=?, next_update=IIF(?='auto' AND (COALESCE(next_update,'')='' OR next_update<=datetime('now')), ?, next_update), consecutive_failures=0, updated_at=datetime('now') WHERE id=?`,
+			entryCount, version, finished, trigger, next, id); err != nil {
 			Logf("error", "威胁情报库: 更新源成功状态失败: %v", err)
 		}
 	}
@@ -609,13 +610,15 @@ func threatListDescription(source string) string {
 // failSourceRow 失败落库：status=failed + message + consecutive_failures+1（遥测计数，
 // 不再驱动排程）+ next_update=下一排程槽（2026-09-25 用户裁定：退避不污染排程，
 // 重试已在任务内完成，耗尽后下一运行=下一排程槽）。
-func failSourceRow(id int, finished string, cause error) {
+// 排程槽生命周期（2026-10-11 用户裁定）：仅 auto 且现存槽空/过期才推进——
+// 手动触发不动预约槽、未来槽不回拨。
+func failSourceRow(id int, finished string, cause error, trigger string) {
 	if _, err := db.DB.Exec(`UPDATE security_threat_sources SET consecutive_failures=consecutive_failures+1 WHERE id=?`, id); err != nil {
 		Logf("error", "威胁情报库: 失败计数更新失败: %v", err)
 	}
 	next := threatNextSlot(time.Now().UTC())
-	if _, err := db.DB.Exec(`UPDATE security_threat_sources SET update_status='failed', message=?, finished_at=?, next_update=?, updated_at=datetime('now') WHERE id=?`,
-		cause.Error(), finished, next, id); err != nil {
+	if _, err := db.DB.Exec(`UPDATE security_threat_sources SET update_status='failed', message=?, finished_at=?, next_update=IIF(?='auto' AND (COALESCE(next_update,'')='' OR next_update<=datetime('now')), ?, next_update), updated_at=datetime('now') WHERE id=?`,
+		cause.Error(), finished, trigger, next, id); err != nil {
 		Logf("error", "威胁情报库: 失败状态落库失败: %v", err)
 	}
 	Logf("warn", "威胁情报库: 源更新失败: %v", cause)

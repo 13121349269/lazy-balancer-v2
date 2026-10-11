@@ -422,10 +422,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { formatDate, formatChartTimeInConfigTz } from '@/utils/date'
 import { getStrategyLabel } from '@/utils/strategyLabels'
 import { hostPortKey } from '@/utils/upstreamKeys'
-import { use } from 'echarts/core'
-import { CanvasRenderer } from 'echarts/renderers'
-import { LineChart } from 'echarts/charts'
-import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
+import '@/utils/echarts' // 统一注册（副作用，全站单点）
 import type { EChartsOption, LineSeriesOption, TooltipComponentFormatterCallbackParams } from 'echarts'
 import VChart from 'vue-echarts'
 import { useAuthStore } from '@/stores/auth'
@@ -436,7 +433,6 @@ import type { APIResponse, SystemInfo, SystemMetrics, CaddyMetrics, Rule, RuleMe
 import { usePollingTask } from '@/composables/usePollingTask'
 import { httpStatusColors } from '@/utils/chartTheme'
 
-use([CanvasRenderer, LineChart, GridComponent, TooltipComponent, LegendComponent])
 
 const authStore = useAuthStore()
 

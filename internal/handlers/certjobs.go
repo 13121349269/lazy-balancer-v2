@@ -283,13 +283,20 @@ func (h *Handlers) RetryCertJob(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid job ID"})
 		return
 	}
+	h.retryCertJobByID(c, id)
+}
+
+// retryCertJobByID 重试入队核心（2026-10-11 抽取）：RetryCertJob 端点与
+// TriggerSystemTask 的 cert-job 行触发分支共用——用户裁定 cert-job 行视为
+// 触发任务（可自动调度即可手动调度，证书可重签发）。
+func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 	operationLock := certJobOperationLock(id)
 	operationLock.Lock()
 	defer operationLock.Unlock()
 	var ruleID, domain, status string
 	var caProviderID int
 	var updatedAt sql.NullTime
-	err = db.DB.QueryRow("SELECT rule_id, domain, status, updated_at, COALESCE(ca_provider_id,0) FROM cert_jobs WHERE id=?", id).Scan(&ruleID, &domain, &status, &updatedAt, &caProviderID)
+	err := db.DB.QueryRow("SELECT rule_id, domain, status, updated_at, COALESCE(ca_provider_id,0) FROM cert_jobs WHERE id=?", id).Scan(&ruleID, &domain, &status, &updatedAt, &caProviderID)
 	if dbQueryNotFound(c, err, "任务不存在", "RetryCertJob query job") {
 		return
 	}

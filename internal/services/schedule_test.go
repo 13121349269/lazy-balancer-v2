@@ -528,7 +528,7 @@ func TestMarkSourceSuccess_usesConfiguredSchedule(t *testing.T) {
 	want := NextScheduledSlot(time.Now().UTC(), []int{5}, "07:15", loc)
 
 	// When 源成功落库
-	markSourceSuccess(id, 10, time.Now().UTC().Format(crsTimeLayout))
+	markSourceSuccess(id, 10, time.Now().UTC().Format(crsTimeLayout), "auto")
 
 	// Then next_update=排程槽（而非 now+24h）
 	var next string

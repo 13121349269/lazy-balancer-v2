@@ -254,15 +254,11 @@ import { request } from '@/utils/api'
 import IPLocationAction from '@/views/security/IPLocationAction.vue'
 import { formatDate } from '@/utils/date'
 import { compareVersion } from '@/utils/securityStages'
-import { use } from 'echarts/core'
-import { CanvasRenderer } from 'echarts/renderers'
-import { BarChart, PieChart as PieSeries } from 'echarts/charts'
-import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
+import '@/utils/echarts' // 统一注册（副作用，全站单点）
 import VChart from 'vue-echarts'
 import type { APIResponse } from '@/types'
 import { securityActionColors } from '@/utils/chartTheme'
 
-use([CanvasRenderer, BarChart, PieSeries, GridComponent, TooltipComponent, LegendComponent])
 
 interface TrendPoint { date: string; blocked: number; detected: number }
 interface TopIP { ip: string; ip_location: string; blocked: number; detected: number; last_time: string; attack_type: string; attack_type_stage?: string

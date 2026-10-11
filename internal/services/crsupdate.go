@@ -344,6 +344,7 @@ func (m *CRSUpdateManager) run(trigger string, rc *taskengine.RunContext) {
 			return
 		}
 		m.fail(err, false)
+		m.advanceSlotIfAuto(trigger)
 		return
 	}
 	writeCRSUpdateLog("INFO", string(CRSStatusChecking), fmt.Sprintf("最新版本 %s，当前版本 %s", tag, currentCRSVersion()))
@@ -354,8 +355,9 @@ func (m *CRSUpdateManager) run(trigger string, rc *taskengine.RunContext) {
 	if cmp, cmpErr := CompareCRSVersions(tag, currentCRSVersion()); cmpErr == nil && cmp <= 0 {
 		writeCRSUpdateLog("INFO", string(CRSStatusSuccess), "已是最新版本，无需更新")
 		if _, err := db.DB.Exec(
-			"UPDATE security_crs_version SET update_status='success', message='已是最新版本', finished_at=datetime('now'), consecutive_failures=0, next_update=IIF(auto_update=1, ?, next_update) WHERE id=1",
-			versionTableNextSlot("security_crs_version", time.Now().UTC()),
+			// 排程槽——手动触发不得改变下一次预约执行时间；现存未来槽不被回拨。
+			"UPDATE security_crs_version SET update_status='success', message='已是最新版本', finished_at=datetime('now'), consecutive_failures=0, next_update=IIF(auto_update=1 AND ?='auto' AND (COALESCE(next_update,'')='' OR next_update<=datetime('now')), ?, next_update) WHERE id=1",
+			trigger, versionTableNextSlot("security_crs_version", time.Now().UTC()),
 		); err != nil {
 			Logf("warn", "crs update: failed to record latest-version skip: %v", err)
 		}
@@ -395,11 +397,12 @@ func (m *CRSUpdateManager) run(trigger string, rc *taskengine.RunContext) {
 			return
 		}
 		m.fail(installErr, true)
+		m.advanceSlotIfAuto(trigger)
 		return
 	}
 	if _, err := db.DB.Exec(
-		"UPDATE security_crs_version SET version=?, updated_at=datetime('now'), update_status='success', message='', finished_at=datetime('now'), consecutive_failures=0, next_update=IIF(auto_update=1, ?, next_update) WHERE id=1",
-		tag, versionTableNextSlot("security_crs_version", time.Now().UTC()),
+		"UPDATE security_crs_version SET version=?, updated_at=datetime('now'), update_status='success', message='', finished_at=datetime('now'), consecutive_failures=0, next_update=IIF(auto_update=1 AND ?='auto' AND (COALESCE(next_update,'')='' OR next_update<=datetime('now')), ?, next_update) WHERE id=1",
+		tag, trigger, versionTableNextSlot("security_crs_version", time.Now().UTC()),
 	); err != nil {
 		Logf("error", "crs update: failed to record success: %v", err)
 	}
@@ -412,6 +415,36 @@ func (m *CRSUpdateManager) run(trigger string, rc *taskengine.RunContext) {
 	writeCRSUpdateLog("INFO", string(CRSStatusSuccess), fmt.Sprintf("CRS 已更新到 %s", tag))
 	// 复审裁定 3：清理 M24 之前版本残留在 live 目录的瞬态工件（仅更新成功后执行）
 	m.cleanupLegacyCRSTransient()
+}
+
+// advanceSlotIfAuto 落定推进排程槽（排程槽生命周期，2026-10-11 用户裁定）：
+// ①仅 auto 触发——手动触发不得改变下一次预约执行时间；②仅当现存槽为空或
+// 已过期——未来槽（配置变更/自定义槽）不被回拨污染。
+// 此前失败不推进：过期槽经 NextSlotFn 步进（coveredSlotStepPast）每 tick 重算
+// 永远领先 now 一步，due 判定窗口零宽，排程永久停摆（10-06 失败后停摆 5 天实证）。
+func (m *CRSUpdateManager) advanceSlotIfAuto(trigger string) {
+	if trigger != "auto" {
+		return
+	}
+	advanceVersionSlotIfDue("security_crs_version")
+}
+
+// advanceVersionSlotIfDue 版本表槽推进共享实现（CRS/IP2Region 同构）：空或过期
+// 才写紧邻下一排程槽；auto_update=0 不动（IIF 兜底）。
+func advanceVersionSlotIfDue(table string) {
+	var cur string
+	if err := db.DB.QueryRow(`SELECT COALESCE(next_update,'') FROM ` + table + ` WHERE id=1`).Scan(&cur); err != nil {
+		return
+	}
+	if cur != "" {
+		if t, err := time.ParseInLocation(crsTimeLayout, cur, time.UTC); err == nil && t.After(time.Now().UTC()) {
+			return // 未来槽不污染
+		}
+	}
+	if _, err := db.DB.Exec(`UPDATE `+table+` SET next_update=IIF(auto_update=1, ?, next_update) WHERE id=1`,
+		versionTableNextSlot(table, time.Now().UTC())); err != nil {
+		Logf("warn", "推进排程槽失败（%s）: %v", table, err)
+	}
 }
 
 func (m *CRSUpdateManager) fail(cause error, restore bool) {

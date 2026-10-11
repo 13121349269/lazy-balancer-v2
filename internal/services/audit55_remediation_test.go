@@ -23,7 +23,7 @@ func TestMarkSourceSuccess_preservesRawHashWhenAbsent(t *testing.T) {
 	}
 
 	// When：快路径形态（无 rawHash 变参）
-	markSourceSuccess(id, 10, "2026.09.25")
+	markSourceSuccess(id, 10, "2026.09.25", "auto")
 
 	// Then：raw_hash 保留（注释「空=不写」的应有语义）
 	var raw string
@@ -35,7 +35,7 @@ func TestMarkSourceSuccess_preservesRawHashWhenAbsent(t *testing.T) {
 	}
 
 	// And：慢路径形态（带 rawHash）正常写入
-	markSourceSuccess(id, 11, "2026.09.25", "def")
+	markSourceSuccess(id, 11, "2026.09.25", "auto", "def")
 	if err := db.DB.QueryRow(`SELECT raw_hash FROM security_threat_sources WHERE name='ustc'`).Scan(&raw); err != nil {
 		t.Fatal(err)
 	}

@@ -127,12 +127,15 @@ func collectCertJobRows() []TaskInfo {
 			}
 		}
 		ti := TaskInfo{
-			ID:         fmt.Sprintf("cert-job:%d", id),
-			Name:       "ACME 签发 · " + domain,
-			Category:   "证书",
-			Kind:       TaskKindOneshot, // 动态签发行=按需触发的工作项
-			Enabled:    true,
-			DetailHint: "certificates",
+			ID:       fmt.Sprintf("cert-job:%d", id),
+			Name:     "ACME 签发 · " + domain,
+			Category: "证书",
+			Kind:     TaskKindOneshot, // 动态签发行=按需触发的工作项
+			// 触发语义（2026-10-11 用户裁定）：cert-job 行视为触发任务——可自动
+			// 调度（签发守护消费）即可手动调度（证书可重签发）；重试门（在途 409/
+			// 退役 429/冷却 429）由 TriggerSystemTask 的 cert-job 分支复用承担。
+			Triggerable: true,
+			DetailHint:  "certificates",
 			LastRun: &TaskRunInfo{StartedAt: localDisplayUTC(updatedAt), FinishedAt: localDisplayUTC(updatedAt),
 				Trigger: "queue", Result: status, Message: message},
 		}

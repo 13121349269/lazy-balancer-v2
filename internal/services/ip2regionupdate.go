@@ -147,6 +147,14 @@ func currentIP2RegionVersion() string {
 // 的完成通道（R64 B-F2，与 CRS 侧同形）：调度器 rearm 须等待该捕获通道而非
 // 回读现行 m.runDone，防手动更新插队覆盖后的错等与误判。手动调用方可忽略。
 // rc 语义同 CRS（RunID>0=引擎已记跳自记；Operator 审计归人）。
+// currentTrigger 当前在途运行触发源（StartUpdate 落 m.state.trigger）——
+// successAfterReloadFailOpen 等无 trigger 形参路径读此（排程槽生命周期门控用）。
+func (m *IP2RegionUpdateManager) currentTrigger() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.state.trigger
+}
+
 func (m *IP2RegionUpdateManager) StartUpdate(trigger string, rc *taskengine.RunContext) (chan struct{}, error) {
 	m.mu.Lock()
 	if m.running {
@@ -296,6 +304,7 @@ func (m *IP2RegionUpdateManager) run(trigger string, rc *taskengine.RunContext) 
 			return
 		}
 		m.fail(err)
+		m.advanceSlotIfAuto(trigger)
 		return
 	}
 	writeIP2RegionUpdateLog("INFO", string(IP2RegionStatusChecking), fmt.Sprintf("最新版本 %s，当前版本 %s", tag, currentIP2RegionVersion()))
@@ -312,8 +321,9 @@ func (m *IP2RegionUpdateManager) run(trigger string, rc *taskengine.RunContext) 
 		}
 		writeIP2RegionUpdateLog("INFO", string(IP2RegionStatusSuccess), "已是最新版本，无需更新")
 		if _, err := db.DB.Exec(
-			"UPDATE security_ip2region_version SET update_status='success', message='已是最新版本', finished_at=datetime('now'), consecutive_failures=0, next_update=IIF(auto_update=1, ?, next_update) WHERE id=1",
-			versionTableNextSlot("security_ip2region_version", time.Now().UTC()),
+			// 排程槽生命周期（2026-10-11 用户裁定）：仅 auto 且现存槽空/过期才推进——手动触发不动预约、未来槽不回拨。
+			"UPDATE security_ip2region_version SET update_status='success', message='已是最新版本', finished_at=datetime('now'), consecutive_failures=0, next_update=IIF(auto_update=1 AND ?='auto' AND (COALESCE(next_update,'')='' OR next_update<=datetime('now')), ?, next_update) WHERE id=1",
+			trigger, versionTableNextSlot("security_ip2region_version", time.Now().UTC()),
 		); err != nil {
 			Logf("warn", "ip2region update: failed to record latest-version skip: %v", err)
 		}
@@ -351,6 +361,7 @@ func (m *IP2RegionUpdateManager) run(trigger string, rc *taskengine.RunContext) 
 			return
 		}
 		m.fail(fmt.Errorf("安装 ip2region xdb 失败: %w", installErr))
+		m.advanceSlotIfAuto(trigger)
 		return
 	}
 
@@ -415,6 +426,7 @@ func (m *IP2RegionUpdateManager) run(trigger string, rc *taskengine.RunContext) 
 			} else {
 				m.fail(fmt.Errorf("重载 Caddy 配置失败: %w", reloadErr))
 			}
+			m.advanceSlotIfAuto(trigger)
 			return
 		default:
 			// R44 F1 fail-open：bakCreated==false（全新部署首次更新，无旧 live
@@ -428,8 +440,8 @@ func (m *IP2RegionUpdateManager) run(trigger string, rc *taskengine.RunContext) 
 	os.Remove(ip2regionLivePath + ".bak")
 
 	if _, err := db.DB.Exec(
-		"UPDATE security_ip2region_version SET version=?, updated_at=datetime('now'), update_status='success', message='', finished_at=datetime('now'), consecutive_failures=0, next_update=IIF(auto_update=1, ?, next_update) WHERE id=1",
-		tag, versionTableNextSlot("security_ip2region_version", time.Now().UTC()),
+		"UPDATE security_ip2region_version SET version=?, updated_at=datetime('now'), update_status='success', message='', finished_at=datetime('now'), consecutive_failures=0, next_update=IIF(auto_update=1 AND ?='auto' AND (COALESCE(next_update,'')='' OR next_update<=datetime('now')), ?, next_update) WHERE id=1",
+		tag, trigger, versionTableNextSlot("security_ip2region_version", time.Now().UTC()),
 	); err != nil {
 		Logf("error", "ip2region update: failed to record success: %v", err)
 	}
@@ -448,6 +460,16 @@ func (m *IP2RegionUpdateManager) run(trigger string, rc *taskengine.RunContext) 
 	m.state.finishedAt = time.Now().UTC()
 	m.mu.Unlock()
 	writeIP2RegionUpdateLog("INFO", string(IP2RegionStatusSuccess), fmt.Sprintf("ip2region 已更新到 %s", tag))
+}
+
+// advanceSlotIfAuto 落定推进排程槽（排程槽生命周期，2026-10-11 用户裁定）：
+// 仅 auto 触发且现存槽空/过期才推进（委托 advanceVersionSlotIfDue 的「未来槽
+// 不污染」门）——手动触发不动预约槽。
+func (m *IP2RegionUpdateManager) advanceSlotIfAuto(trigger string) {
+	if trigger != "auto" {
+		return
+	}
+	advanceVersionSlotIfDue("security_ip2region_version")
 }
 
 func (m *IP2RegionUpdateManager) fail(cause error) {
@@ -680,8 +702,8 @@ func (m *IP2RegionUpdateManager) successAfterReloadFailOpen(tag string, reloadEr
 		warn += "内存 searcher 未切换，重启后生效"
 	}
 	if _, err := db.DB.Exec(
-		"UPDATE security_ip2region_version SET version=?, updated_at=datetime('now'), update_status='success', message=?, finished_at=datetime('now'), consecutive_failures=0, next_update=IIF(auto_update=1, ?, next_update) WHERE id=1",
-		tag, warn, versionTableNextSlot("security_ip2region_version", time.Now().UTC()),
+		"UPDATE security_ip2region_version SET version=?, updated_at=datetime('now'), update_status='success', message=?, finished_at=datetime('now'), consecutive_failures=0, next_update=IIF(auto_update=1 AND ?='auto' AND (COALESCE(next_update,'')='' OR next_update<=datetime('now')), ?, next_update) WHERE id=1",
+		tag, warn, m.currentTrigger(), versionTableNextSlot("security_ip2region_version", time.Now().UTC()),
 	); err != nil {
 		Logf("error", "ip2region update: failed to record fail-open success: %v", err)
 	}

@@ -500,6 +500,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 			{
 				// 任务监控聚合视图（全员可见；从节点经 readOnlyGuard 只读可用）
 				business.GET("/system/tasks", h.ListSystemTasks)
+				business.GET("/system/tasks/stats-24h-series", h.GetSystemTaskStats24hSeries)
 				business.GET("/system/tasks/:id/history", h.GetSystemTaskHistory)
 				business.GET("/system/tasks/:id/logs", h.GetSystemTaskLogs)
 				// Current user (self)

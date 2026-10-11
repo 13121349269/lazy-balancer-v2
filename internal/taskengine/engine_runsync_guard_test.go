@@ -58,7 +58,7 @@ func TestRunSync_masterOnlyRejectedOnSlave(t *testing.T) {
 func TestRunSync_oneshotStillExecutes(t *testing.T) {
 	e := newTestEngine(t)
 	var runs atomic.Int32
-	e.Register(Descriptor{ID: "t-rso", Family: "t", Name: "单次O", Kind: KindOneshot, ManualRun: true,
+	e.Register(Descriptor{ID: "t-rso", Family: "t", Name: "单次O", Kind: KindOneshot,
 		Run: func(rc RunContext) error { runs.Add(1); return nil }})
 	e.SetRole(true)
 

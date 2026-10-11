@@ -549,9 +549,10 @@ func TestSetCRSAutoUpdate_schedulesNextUpdate(t *testing.T) {
 	}
 }
 
-// R69（用户报告）：手动更新成功（已是最新分支）在 auto_update=1 时刷新
-// next_update=+24h——此前手动成功不写，UI 显示 —；auto_update=0 保持空。
-func TestCRSRun_successRefreshesNextUpdate(t *testing.T) {
+// 排程槽生命周期（2026-10-11 用户裁定，取代 R69 旧口径）：手动触发成功
+// **不刷新** next_update——手动执行不得改变下一次预约执行时间，空槽亦不
+// 补写（预约由排程保存/启动武装路径建立）；auto_update=0 保持空。
+func TestCRSRun_manualSuccessKeepsNextUpdate(t *testing.T) {
 	m := newTestCRSManager(t)
 	seedCRSVersionRow(t, "v4.14.0", true)
 	m.fetchLatestTag = func(context.Context) (string, error) { return "v4.14.0", nil }
@@ -566,8 +567,8 @@ func TestCRSRun_successRefreshesNextUpdate(t *testing.T) {
 	if status != "success" {
 		t.Fatalf("status=%q, want success", status)
 	}
-	if nextUpdate == "" {
-		t.Fatal("手动更新成功且 auto_update=1 时 next_update 未刷新（UI「下次更新」显示 —）")
+	if nextUpdate != "" {
+		t.Fatalf("手动成功不得写 next_update（预约不可被手动改变，got %q）", nextUpdate)
 	}
 
 	// auto_update=0：成功不排程

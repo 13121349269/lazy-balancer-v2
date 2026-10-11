@@ -91,17 +91,21 @@ func TestTriggerSystemTask_gatesAndMapping(t *testing.T) {
 	newBackupTestHandlers(t)
 	r, _ := taskMonitorRouter()
 
-	// config-watchdog（真实注册，ManualRun=false）→ 命中 !m.CanTrigger 分支
-	// → 400「不支持手动触发（常驻族启停即可/镜像族）」。
-	// U1-66-09：曾用未注册 ID「cert-queue」——恒命中 Lookup-miss 分支，
-	// ManualRun=false 门从未被钉（分支文案同前缀，无法区分）。
+	// 类型派生（2026-10-11 用户裁定，取代 ManualRun 白名单）：config-watchdog
+	//（循环）类型派生可触发 → 200；常驻族（cluster-sync daemon）恒不可触发 →
+	// 400「不支持手动触发（常驻族启停即可/镜像族）」。
 	resp := httptest.NewRecorder()
 	r.ServeHTTP(resp, httptest.NewRequest(http.MethodPost, "/system/tasks/config-watchdog/trigger", nil))
-	if resp.Code != http.StatusBadRequest {
-		t.Fatalf("config-watchdog 触发应 400, got %d", resp.Code)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("config-watchdog（循环，类型派生可触发）触发应 200, got %d: %s", resp.Code, resp.Body.String())
 	}
-	if !strings.Contains(resp.Body.String(), "不支持手动触发（常驻族启停即可/镜像族）") {
-		t.Fatalf("应命中 !CanTrigger 分支文案（非 Lookup-miss）: %s", resp.Body.String())
+	respDaemon := httptest.NewRecorder()
+	r.ServeHTTP(respDaemon, httptest.NewRequest(http.MethodPost, "/system/tasks/cluster-sync/trigger", nil))
+	if respDaemon.Code != http.StatusBadRequest {
+		t.Fatalf("cluster-sync（常驻族）触发应 400, got %d", respDaemon.Code)
+	}
+	if !strings.Contains(respDaemon.Body.String(), "不支持手动触发（常驻族启停即可/镜像族）") {
+		t.Fatalf("应命中 !CanTrigger 分支文案（常驻族恒不可触发）: %s", respDaemon.Body.String())
 	}
 
 	// 从节点 → 403

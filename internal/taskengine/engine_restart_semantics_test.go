@@ -189,7 +189,7 @@ func TestEngine_StopLoopImmediatelyAfterStartEventuallyStops(t *testing.T) {
 // Then panic 被隔离为 failed 行（不得杀进程）。
 func TestEngine_TaskRunPanicRecordsFailed(t *testing.T) {
 	e := newTestEngine(t)
-	e.Register(Descriptor{ID: "t-panic", Family: "t", Name: "恐慌任务", Kind: KindOneshot, ManualRun: true,
+	e.Register(Descriptor{ID: "t-panic", Family: "t", Name: "恐慌任务", Kind: KindOneshot,
 		Run: func(rc RunContext) error { panic("boom") }})
 	_, err := e.RunSync("t-panic", "manual", "tester")
 	if err == nil {
