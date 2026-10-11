@@ -93,6 +93,13 @@ func (h *Handlers) TriggerSystemTask(c *gin.Context) {
 					if errors.Is(err, taskengine.ErrAlreadyRunning) {
 						return
 					}
+					// LNK71-1（第 71 轮 P5）：skipped 终态=Run 体「非故障放弃」
+					// （threat/crs/ip2region demote 中止等，TASK-L5 哨兵），task_runs
+					// 已落 skipped 行——非失败，复记「触发失败」是语义失真（镜像
+					// TASK-2 对 ErrAlreadyRunning 的静默裁定）。
+					if errors.Is(err, taskengine.ErrTaskSkipped) {
+						return
+					}
 					services.Logf("error", "手动触发任务 %s 失败: %v", id, err)
 					services.RecordAuditLog(op, "触发失败", "任务监控", fmt.Sprintf("手动触发任务 %s 失败: %v", m.Name, err), "")
 				}

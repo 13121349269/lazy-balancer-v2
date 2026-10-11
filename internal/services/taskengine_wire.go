@@ -225,10 +225,10 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 			if certJobsActiveFn() {
 				return "running"
 			}
-			if te := TaskEngine(); te != nil && te.IsRunning("cert-waiting-ca") {
-				return "idle"
-			}
-			return "stopped"
+			// 方案 A（2026-10-12 用户裁定）：状态列只承载执行语义——stopped 词
+			// 退役（原「stopped 仅常驻」模型废）。无活跃证书任务=空闲执行语义；
+			// 调度开关态由开关列（loop_on）表达。
+			return "idle"
 		},
 		NextSlotFn: func() time.Time { // 有等待任务时展示最近 CA 可用时间
 			var at string
@@ -344,8 +344,6 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 		},
 		MasterOnly: true,
 		CancelHook: func() bool { return GetThreatUpdateManager() != nil && GetThreatUpdateManager().CancelRunning() },
-		ToggleFn:   SetThreatAutoUpdate,
-		ToggleName: "威胁情报库自动更新",
 		Run: func(rc taskengine.RunContext) error {
 			m := GetThreatUpdateManager()
 			if m == nil {
@@ -402,8 +400,6 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 		},
 		MasterOnly: true,
 		CancelHook: func() bool { m := GetCRSUpdateManager(); return m != nil && m.CancelRunning() },
-		ToggleFn:   SetCRSAutoUpdate,
-		ToggleName: "CRS 自动更新",
 		Run: func(rc taskengine.RunContext) error {
 			m := GetCRSUpdateManager()
 			if m == nil {
@@ -456,8 +452,6 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 		},
 		MasterOnly: true,
 		CancelHook: func() bool { return GetIP2RegionUpdateManager() != nil && GetIP2RegionUpdateManager().CancelRunning() },
-		ToggleFn:   SetIP2RegionAutoUpdate,
-		ToggleName: "IP2Region 自动更新",
 		Run: func(rc taskengine.RunContext) error {
 			m := GetIP2RegionUpdateManager()
 			if m == nil {

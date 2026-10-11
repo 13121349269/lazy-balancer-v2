@@ -366,3 +366,24 @@ func TestCreateUser_configuredBodyLimit413(t *testing.T) {
 		t.Fatalf("status=%d body=%.200s, want 201(配置上限下小 body 不受影响)", response.Code, response.Body.String())
 	}
 }
+
+// F-SYSR-1（第 71 轮审计）：ListUsers 空表出口归一——data 须为 [] 而非 null
+// （与 apikeys scanAPIKeys 出口同形，两形状并存会让前端判空逻辑分裂）。
+func TestListUsers_emptyTableReturnsEmptyArray(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	router := gin.New()
+	router.GET("/users", h.ListUsers)
+
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/users", nil))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), `"data":null`) {
+		t.Fatalf("空表返回 data=null，须归一为 []: %s", response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"data":[]`) {
+		t.Fatalf("空表 data 须为 []: %s", response.Body.String())
+	}
+}

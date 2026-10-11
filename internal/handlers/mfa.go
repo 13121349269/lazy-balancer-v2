@@ -37,7 +37,19 @@ func (h *Handlers) MFAVerifyLogin(c *gin.Context) {
 		FROM mfa_challenges ch JOIN users u ON u.id = ch.user_id
 		WHERE ch.token=? AND ch.expires_at > datetime('now')`, req.MFAToken).
 		Scan(&userID, &passwordVersion, &user.Username, &user.Role, &user.DisplayName, &user.IsEnabled, &user.CreatedAt, &user.LastLogin, &user.AuthProvider)
-	if err != nil || !user.IsEnabled {
+	if err != nil {
+		// F-SYS-1（第 71 轮审计）：DB 故障与无效挑战分判——基础设施错误 500，
+		// 不再伪装成 401（挑战无效不泄露具体原因的口径仅适用于 ErrNoRows）。
+		if !errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "数据库错误"})
+			return
+		}
+		// 挑战无效不泄露具体原因
+		services.RecordAuditLog("", "认证拒绝", "用户认证", services.FormatAuditDetail("MFA", "挑战令牌无效或已过期"), c.ClientIP())
+		c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: "MFA 挑战无效或已过期，请重新登录"})
+		return
+	}
+	if !user.IsEnabled {
 		// 挑战无效不泄露具体原因
 		services.RecordAuditLog("", "认证拒绝", "用户认证", services.FormatAuditDetail("MFA", "挑战令牌无效或已过期"), c.ClientIP())
 		c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: "MFA 挑战无效或已过期，请重新登录"})

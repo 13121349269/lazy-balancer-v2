@@ -1117,7 +1117,7 @@ func insertSnapshotRules(ctx context.Context, tx *sql.Tx, rules []models.LbRule)
 		// 本次「分区滞后」永不自愈事故的根因。
 		normalizeRuleForTransport(&rule)
 		if _, err := tx.ExecContext(ctx, `INSERT INTO lb_rules (id,caddy_id,name,description,protocol,domain,listen_port,strategy,dynamic_dns,enable_dns_server,dns_server,dns_family,health_check_path,health_check_interval,health_check_timeout,health_check_unhealthy_threshold,health_check_healthy_threshold,enable_active_health_check,tcp_health_check_port,tcp_proxy_protocol,tcp_try_duration,tcp_try_interval,request_body_max_size_mb,upstream_keepalive_timeout,server_tokens_hidden,custom_routes_enabled,proxy_dial_timeout,proxy_response_header_timeout,proxy_read_timeout,proxy_write_timeout,proxy_stream_timeout,proxy_flush_interval,proxy_stream_close_delay,host_header,health_check_host,enable_tls,tls_source,acme_config_id,ca_provider_id,tls_cert,tls_key,tls_http_redirect,enable_compress,compress_types,enabled,log_enabled,created_by,updated_by,created_at,updated_at,block_page_stage1_id,block_page_stage1_status,block_page_stage3_id,block_page_stage3_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			rule.ID, rule.CaddyID, rule.Name, rule.Description, rule.Protocol, rule.Domain, rule.ListenPort, rule.Strategy, rule.DynamicDNS, rule.EnableDnsServer, rule.DnsServer, rule.DnsFamily, rule.HealthCheckPath, rule.HealthCheckInterval, rule.HealthCheckTimeout, rule.HealthCheckUnhealthyThreshold, rule.HealthCheckHealthyThreshold, rule.EnableActiveHealthCheck, rule.TCPHealthCheckPort, rule.TCPProxyProtocol, rule.TCPTryDuration, rule.TCPTryInterval, rule.RequestBodyMaxSizeMB, rule.UpstreamKeepaliveTimeout, rule.ServerTokensHidden, rule.CustomRoutesEnabled, rule.ProxyDialTimeout, rule.ProxyResponseHeaderTimeout, rule.ProxyReadTimeout, rule.ProxyWriteTimeout, rule.ProxyStreamTimeout, rule.ProxyFlushInterval, rule.ProxyStreamCloseDelay, rule.HostHeader, rule.HealthCheckHost, rule.EnableTLS, rule.TLSSource, rule.ACMEConfigID, rule.CAProviderID, rule.TLSCert, rule.TLSKey, rule.TLSHTTPRedirect, rule.EnableCompress, rule.CompressTypes, rule.Enabled, rule.LogEnabled, rule.CreatedBy, rule.UpdatedBy, rule.CreatedAt.UTC().Format("2006-01-02 15:04:05"), nullableTimeFlat(rule.UpdatedAt.NullTime), rule.BlockPageStage1ID, rule.BlockPageStage1Status, rule.BlockPageStage3ID, rule.BlockPageStage3Status); err != nil {
+			rule.ID, rule.CaddyID, rule.Name, rule.Description, rule.Protocol, rule.Domain, rule.ListenPort, rule.Strategy, rule.DynamicDNS, rule.EnableDnsServer, rule.DnsServer, rule.DnsFamily, rule.HealthCheckPath, rule.HealthCheckInterval, rule.HealthCheckTimeout, rule.HealthCheckUnhealthyThreshold, rule.HealthCheckHealthyThreshold, rule.EnableActiveHealthCheck, rule.TCPHealthCheckPort, rule.TCPProxyProtocol, rule.TCPTryDuration, rule.TCPTryInterval, rule.RequestBodyMaxSizeMB, rule.UpstreamKeepaliveTimeout, rule.ServerTokensHidden, rule.CustomRoutesEnabled, rule.ProxyDialTimeout, rule.ProxyResponseHeaderTimeout, rule.ProxyReadTimeout, rule.ProxyWriteTimeout, rule.ProxyStreamTimeout, rule.ProxyFlushInterval, rule.ProxyStreamCloseDelay, rule.HostHeader, rule.HealthCheckHost, rule.EnableTLS, rule.TLSSource, rule.ACMEConfigID, rule.CAProviderID, rule.TLSCert, rule.TLSKey, rule.TLSHTTPRedirect, rule.EnableCompress, rule.CompressTypes, rule.Enabled, rule.LogEnabled, rule.CreatedBy, rule.UpdatedBy, rule.CreatedAt.UTC().Format(crsTimeLayout), nullableTimeFlat(rule.UpdatedAt.NullTime), rule.BlockPageStage1ID, rule.BlockPageStage1Status, rule.BlockPageStage3ID, rule.BlockPageStage3Status); err != nil {
 			return fmt.Errorf("写入快照规则 %s: %w", rule.CaddyID, err)
 		}
 		for _, upstream := range rule.Upstreams {
@@ -1132,6 +1132,8 @@ func insertSnapshotRules(ctx context.Context, tx *sql.Tx, rules []models.LbRule)
 	return nil
 }
 
+// CL-B1（第 71 轮审计）：本函数与 nullableTimeFlat 的时间戳布局统一引用
+// crsTimeLayout 常量（此前字面量与常量双拼法并存）。
 func insertSnapshotPathRules(ctx context.Context, tx *sql.Tx, ruleID string, pathRules []models.PathRule) error {
 	for _, pathRule := range pathRules {
 		var upstreamsJSON any
@@ -1144,9 +1146,9 @@ func insertSnapshotPathRules(ctx context.Context, tx *sql.Tx, ruleID string, pat
 		}
 		var err error
 		if pathRule.ID > 0 {
-			_, err = tx.ExecContext(ctx, `INSERT INTO path_rules (id,rule_id,sort_order,match_type,path,upstream_path,upstreams_json,response_mode,response_status,response_body,response_content_type,redirect_to,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, pathRule.ID, ruleID, pathRule.SortOrder, pathRule.MatchType, pathRule.Path, pathRule.UpstreamPath, upstreamsJSON, pathRule.ResponseMode, pathRule.ResponseStatus, pathRule.ResponseBody, pathRule.ResponseContentType, pathRule.RedirectTo, pathRule.CreatedAt.UTC().Format("2006-01-02 15:04:05"), nullableTimeFlat(pathRule.UpdatedAt))
+			_, err = tx.ExecContext(ctx, `INSERT INTO path_rules (id,rule_id,sort_order,match_type,path,upstream_path,upstreams_json,response_mode,response_status,response_body,response_content_type,redirect_to,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, pathRule.ID, ruleID, pathRule.SortOrder, pathRule.MatchType, pathRule.Path, pathRule.UpstreamPath, upstreamsJSON, pathRule.ResponseMode, pathRule.ResponseStatus, pathRule.ResponseBody, pathRule.ResponseContentType, pathRule.RedirectTo, pathRule.CreatedAt.UTC().Format(crsTimeLayout), nullableTimeFlat(pathRule.UpdatedAt))
 		} else {
-			_, err = tx.ExecContext(ctx, `INSERT INTO path_rules (rule_id,sort_order,match_type,path,upstream_path,upstreams_json,response_mode,response_status,response_body,response_content_type,redirect_to,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`, ruleID, pathRule.SortOrder, pathRule.MatchType, pathRule.Path, pathRule.UpstreamPath, upstreamsJSON, pathRule.ResponseMode, pathRule.ResponseStatus, pathRule.ResponseBody, pathRule.ResponseContentType, pathRule.RedirectTo, pathRule.CreatedAt.UTC().Format("2006-01-02 15:04:05"), nullableTimeFlat(pathRule.UpdatedAt))
+			_, err = tx.ExecContext(ctx, `INSERT INTO path_rules (rule_id,sort_order,match_type,path,upstream_path,upstreams_json,response_mode,response_status,response_body,response_content_type,redirect_to,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`, ruleID, pathRule.SortOrder, pathRule.MatchType, pathRule.Path, pathRule.UpstreamPath, upstreamsJSON, pathRule.ResponseMode, pathRule.ResponseStatus, pathRule.ResponseBody, pathRule.ResponseContentType, pathRule.RedirectTo, pathRule.CreatedAt.UTC().Format(crsTimeLayout), nullableTimeFlat(pathRule.UpdatedAt))
 		}
 		if err != nil {
 			return fmt.Errorf("写入快照路径 %s: %w", pathRule.Path, err)
@@ -1271,7 +1273,7 @@ func nullableTimeFlat(value sql.NullTime) any {
 	if !value.Valid {
 		return nil
 	}
-	return value.Time.UTC().Format("2006-01-02 15:04:05")
+	return value.Time.UTC().Format(crsTimeLayout)
 }
 
 // snapshotSecurityVersionRowsDiffer 比较快照携带的 CRS/IP2Region 版本行与

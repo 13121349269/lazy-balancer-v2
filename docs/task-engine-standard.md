@@ -36,13 +36,13 @@ type Descriptor struct {
     IntervalFn func() time.Duration  // Periodic：固定间隔
     Run        func(RunContext) error // Daemon: 阻塞直到 ctx.Done()
     CancelHook func() bool; EnabledFn func() bool
-    StatusFn func() string; ToggleFn func(bool) error
-    ToggleName string; ManualRun, Cancelable bool
+    StatusFn func() string
+    ManualRun, Cancelable bool
     RunsOn Role; MasterOnly bool
 }
 ```
 
-已删除：`SilentProbes`/`RecordFailuresOnly`/`SignalledWork`/`AsKind`/`Cadence`/`Singleton`——Kind 单独决定全部行为。
+已删除：`SilentProbes`/`RecordFailuresOnly`/`SignalledWork`/`AsKind`/`Cadence`/`Singleton`——Kind 单独决定全部行为；`ToggleFn`/`ToggleName`（LNK71-3，2026-10-11）——v2.0 调度开关统一（StartLoop/StopLoop）后声明族零消费退役，TaskMeta/TaskInfo 的 `toggleable`/`toggle_name` 序列化字段一并删除。
 
 ## 2. 任务清单（16 注册任务）
 

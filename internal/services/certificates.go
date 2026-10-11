@@ -357,12 +357,14 @@ func NewCertificateService() *CertificateService {
 	return service
 }
 
-// waitDoneOrTimeout 有界等待部署定时器/回调退出（R57 A-#2）：回调链条最终
-// 调到非 context-aware 的 caddyReloader，挂起时裸等会拖死调用方。超时后放
-// 弃本轮调度——deployment_available_after 已落库，后续补扫/重启可再拾起；
-// DeployLock 按规则串行 + 终态 CAS 保证滞留回调即便最终退出也不会并发部署。
+// waitDoneOrTimeout 有界等待部署定时器/回调退出（R57 A-#2；CERT71-1 第 71 轮
+// 收敛 cancelDeploymentRetry/pauseDeploymentRetries 的内联同构等待）：回调链条最终
+// 调到非 context-aware 的 caddyReloader，挂起时裸等会拖死调用方（签发
+// goroutine/取消/暂停/Resume/启动恢复）。超时后放弃等待继续调用方流程——
+// 重排侧等于放弃本轮调度：deployment_available_after 已落库，后续补扫/重启可再
+// 拾起；DeployLock 按规则串行 + 终态 CAS 保证滞留回调即便最终退出也不会并发部署。
 // CERT-C（第 70 轮）：timeout<=0 回退 30s；调用点统一传 s.cancelWaitTimeout
-// （测试缝，与 cancelDeploymentRetry/Stop 的同模式同口径）。
+// （测试缝，同模式同口径）。jobID=0 表示无单任务上下文（全量暂停路径）。
 func waitDoneOrTimeout(done <-chan struct{}, timeout time.Duration, jobID int, what string) {
 	if timeout <= 0 {
 		timeout = 30 * time.Second
@@ -370,7 +372,11 @@ func waitDoneOrTimeout(done <-chan struct{}, timeout time.Duration, jobID int, w
 	select {
 	case <-done:
 	case <-time.After(timeout):
-		Logf("warn", "证书任务 %d：等待%s退出超时（%s），放弃本轮重试调度", jobID, what, timeout)
+		if jobID > 0 {
+			Logf("warn", "证书任务 %d：等待%s退出超时（%s），继续后续流程", jobID, what, timeout)
+		} else {
+			Logf("warn", "等待%s退出超时（%s），继续后续流程", what, timeout)
+		}
 	}
 }
 
@@ -475,26 +481,15 @@ func (s *CertificateService) cancelDeploymentRetry(jobID int) {
 		runningDone = append(runningDone, callback.done)
 	}
 	s.timerMu.Unlock()
-	// 在途部署回调退出等待必须有界：回调链条最终调到 caddyReloader（非
-	// context-aware），Caddy admin 请求异常挂起时 HTTP 调用方会被永久挂起；
-	// 与 CAQueueManager.CancelJob 的 30s 上限同模式（R36 C-1 / R42 发现3）。
-	waitTimeout := s.cancelWaitTimeout
-	if waitTimeout <= 0 {
-		waitTimeout = 30 * time.Second
-	}
+	// 在途部署回调退出等待必须有界：回调链条最终调到非 context-aware 的
+	// caddyReloader，Caddy admin 请求异常挂起时取消流程会被永久挂起；与
+	// CAQueueManager.CancelJob 的 30s 上限同模式（R36 C-1 / R42 发现3）。
+	// CERT71-1（第 71 轮）：内联等待收敛到 waitDoneOrTimeout。
 	if pendingDone != nil {
-		select {
-		case <-pendingDone:
-		case <-time.After(waitTimeout):
-			Logf("warn", "取消证书任务 %d：等待待定部署定时器退出超时（%s），继续后续流程", jobID, waitTimeout)
-		}
+		waitDoneOrTimeout(pendingDone, s.cancelWaitTimeout, jobID, "待定部署定时器")
 	}
 	for _, done := range runningDone {
-		select {
-		case <-done:
-		case <-time.After(waitTimeout):
-			Logf("warn", "取消证书任务 %d：等待在途部署回调退出超时（%s），继续后续流程", jobID, waitTimeout)
-		}
+		waitDoneOrTimeout(done, s.cancelWaitTimeout, jobID, "在途部署回调")
 	}
 }
 
@@ -553,19 +548,12 @@ func (s *CertificateService) pauseDeploymentRetries() {
 		}
 	}
 	s.timerMu.Unlock()
-	// 在途回调退出等待必须有界（与 cancelDeploymentRetry 同模式，R43 A-2）：
-	// 回调链条调到非 context-aware 的 caddyReloader，Caddy admin 请求异常挂起时
-	// 配置导入/进程 Stop 会被永久挂起。
-	waitTimeout := s.cancelWaitTimeout
-	if waitTimeout <= 0 {
-		waitTimeout = 30 * time.Second
-	}
+	// 在途回调退出等待必须有界（与 cancelDeploymentRetry 同模式，R43 A-2；
+	// CERT71-1 第 71 轮收敛到 waitDoneOrTimeout）：回调链条调到非
+	// context-aware 的 caddyReloader，Caddy admin 请求异常挂起时配置导入/
+	// 进程 Stop 会被永久挂起。全量暂停无单任务上下文（jobID=0）。
 	for _, done := range waitFor {
-		select {
-		case <-done:
-		case <-time.After(waitTimeout):
-			Logf("warn", "暂停证书部署重试：等待在途回调退出超时（%s），继续后续流程", waitTimeout)
-		}
+		waitDoneOrTimeout(done, s.cancelWaitTimeout, 0, "在途部署回调")
 	}
 }
 
@@ -1305,10 +1293,21 @@ func (s *CertificateService) renewExpiringCertificates() {
 		return
 	}
 	domains := make([]string, 0, len(jobs))
+	capped := 0
 	for _, j := range jobs {
 		domains = append(domains, j.Domain)
+		if j.RenewalAttempts >= maxAttempts {
+			capped++
+		}
 	}
-	TaskLogf("cert-renewal-scan", "scan", "检测到 %d 个临期/待重试证书任务：%s", len(jobs), strings.Join(domains, "、"))
+	// CERT71-3（第 71 轮审计）：已达上限任务每轮仍被选出（CERT-A warn 形态，
+	// 自动重试不可达），摘要须分档标注——否则「待重试」口径失真。全部未达
+	// 上限时保持原文案（不追加空括注）。
+	if capped > 0 {
+		TaskLogf("cert-renewal-scan", "scan", "检测到 %d 个临期/待重试证书任务（其中 %d 个已达重试上限，仅手动重签可达）：%s", len(jobs), capped, strings.Join(domains, "、"))
+	} else {
+		TaskLogf("cert-renewal-scan", "scan", "检测到 %d 个临期/待重试证书任务：%s", len(jobs), strings.Join(domains, "、"))
+	}
 
 	for _, j := range jobs {
 		if j.RenewalAttempts >= maxAttempts {
@@ -1443,6 +1442,54 @@ func (s *CertificateService) checkManualCertExpiration() {
 	}
 }
 
+// scanRenewalCandidates CERT71-2（第 71 轮）：CheckExpiration 与
+// checkFailedFirstIssuance 的同构行扫描体收敛单份——规范域名比对（规则/任务
+// 域名不一致跳过该行）+ 已有证书判读（选中证书域名匹配且有效期晚于续期窗口则
+// 跳过）+ 行收集。warnPrefix 仅区分 Scan 失败告警的来源扫描（CERT-L2 第 69 轮
+// 「不静默」口径，同 checkManualCertExpiration）。
+func scanRenewalCandidates(rows *sql.Rows, days int, warnPrefix string) []models.CertJob {
+	var jobs []models.CertJob
+	now := time.Now()
+	selectedByRule := make(map[string]CertificateSelection)
+	selectionLoaded := make(map[string]bool)
+	for rows.Next() {
+		var j models.CertJob
+		var ruleDomain string
+		if err := rows.Scan(
+			&j.ID, &j.RuleID, &j.Domain, &j.Status, &j.ExpiresAt, &j.CAProviderID, &j.RenewalAttempts, &j.CAAvailableAfter, &j.LastErrorCode, &ruleDomain,
+		); err != nil {
+			Logf("warn", "%s: scan failed, skipping row: %v", warnPrefix, err)
+			continue
+		}
+		canonicalRule, ruleErr := CanonicalACMEDomains(ruleDomain)
+		canonicalJob, jobErr := CanonicalACMEDomains(j.Domain)
+		if ruleErr != nil || jobErr != nil || canonicalRule != canonicalJob {
+			continue
+		}
+		selection, selected := selectedByRule[j.RuleID]
+		if !selectionLoaded[j.RuleID] {
+			var err error
+			selection, selected, err = selectStoredRuleCertificate(context.Background(), j.RuleID, ruleDomain, now)
+			selectionLoaded[j.RuleID] = true
+			if err != nil {
+				Logf("error", "Failed to select current certificate for rule %s: %v", j.RuleID, err)
+				continue
+			}
+			if selected {
+				selectedByRule[j.RuleID] = selection
+			}
+		}
+		if selected {
+			canonicalSelected, selectedErr := CanonicalACMEDomains(selection.Candidate.Domain)
+			if selectedErr == nil && canonicalSelected == canonicalRule && selection.Certificate.NotAfter.After(now.Add(time.Duration(days)*24*time.Hour)) {
+				continue
+			}
+		}
+		jobs = append(jobs, j)
+	}
+	return jobs
+}
+
 func (s *CertificateService) CheckExpiration() []models.CertJob {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1467,47 +1514,7 @@ func (s *CertificateService) CheckExpiration() []models.CertJob {
 	}
 	defer rows.Close()
 
-	var jobs []models.CertJob
-	now := time.Now()
-	selectedByRule := make(map[string]CertificateSelection)
-	selectionLoaded := make(map[string]bool)
-	for rows.Next() {
-		var j models.CertJob
-		var ruleDomain string
-		if err := rows.Scan(
-			&j.ID, &j.RuleID, &j.Domain, &j.Status, &j.ExpiresAt, &j.CAProviderID, &j.RenewalAttempts, &j.CAAvailableAfter, &j.LastErrorCode, &ruleDomain,
-		); err != nil {
-			// CERT-L2（第 69 轮）：对齐 Round 35 B4「不静默」先例——Scan 失败须留告警，
-			// 否则续期扫描遗漏该轮（口径同 checkManualCertExpiration :1374）。
-			Logf("warn", "cert expiration check: scan failed, skipping row: %v", err)
-			continue
-		}
-		canonicalRule, ruleErr := CanonicalACMEDomains(ruleDomain)
-		canonicalJob, jobErr := CanonicalACMEDomains(j.Domain)
-		if ruleErr != nil || jobErr != nil || canonicalRule != canonicalJob {
-			continue
-		}
-		selection, selected := selectedByRule[j.RuleID]
-		if !selectionLoaded[j.RuleID] {
-			selection, selected, err = selectStoredRuleCertificate(context.Background(), j.RuleID, ruleDomain, now)
-			selectionLoaded[j.RuleID] = true
-			if err != nil {
-				Logf("error", "Failed to select current certificate for rule %s: %v", j.RuleID, err)
-				continue
-			}
-			if selected {
-				selectedByRule[j.RuleID] = selection
-			}
-		}
-		if selected {
-			canonicalSelected, selectedErr := CanonicalACMEDomains(selection.Candidate.Domain)
-			if selectedErr == nil && canonicalSelected == canonicalRule && selection.Certificate.NotAfter.After(now.Add(time.Duration(days)*24*time.Hour)) {
-				continue
-			}
-		}
-		jobs = append(jobs, j)
-	}
-	return jobs
+	return scanRenewalCandidates(rows, days, "cert expiration check")
 }
 
 const firstIssuanceRetryCooldownMinutes = 30
@@ -1539,47 +1546,7 @@ func (s *CertificateService) checkFailedFirstIssuance(maxAttempts int) []models.
 	}
 	defer rows.Close()
 
-	var jobs []models.CertJob
-	now := time.Now()
-	selectedByRule := make(map[string]CertificateSelection)
-	selectionLoaded := make(map[string]bool)
-	for rows.Next() {
-		var j models.CertJob
-		var ruleDomain string
-		if err := rows.Scan(
-			&j.ID, &j.RuleID, &j.Domain, &j.Status, &j.ExpiresAt, &j.CAProviderID, &j.RenewalAttempts, &j.CAAvailableAfter, &j.LastErrorCode, &ruleDomain,
-		); err != nil {
-			// CERT-L2（第 69 轮）：对齐 Round 35 B4「不静默」先例——Scan 失败须留告警，
-			// 否则首发失败重试扫描遗漏该轮（口径同 checkManualCertExpiration :1374）。
-			Logf("warn", "failed first-issuance check: scan failed, skipping row: %v", err)
-			continue
-		}
-		canonicalRule, ruleErr := CanonicalACMEDomains(ruleDomain)
-		canonicalJob, jobErr := CanonicalACMEDomains(j.Domain)
-		if ruleErr != nil || jobErr != nil || canonicalRule != canonicalJob {
-			continue
-		}
-		selection, selected := selectedByRule[j.RuleID]
-		if !selectionLoaded[j.RuleID] {
-			selection, selected, err = selectStoredRuleCertificate(context.Background(), j.RuleID, ruleDomain, now)
-			selectionLoaded[j.RuleID] = true
-			if err != nil {
-				Logf("error", "Failed to select current certificate for rule %s: %v", j.RuleID, err)
-				continue
-			}
-			if selected {
-				selectedByRule[j.RuleID] = selection
-			}
-		}
-		if selected {
-			canonicalSelected, selectedErr := CanonicalACMEDomains(selection.Candidate.Domain)
-			if selectedErr == nil && canonicalSelected == canonicalRule && selection.Certificate.NotAfter.After(now.Add(time.Duration(days)*24*time.Hour)) {
-				continue
-			}
-		}
-		jobs = append(jobs, j)
-	}
-	return jobs
+	return scanRenewalCandidates(rows, days, "failed first-issuance check")
 }
 
 func selectStoredRuleCertificate(ctx context.Context, ruleID, ruleDomains string, now time.Time) (CertificateSelection, bool, error) {

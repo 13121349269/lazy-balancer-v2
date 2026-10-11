@@ -150,7 +150,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Lock, Search, WarningFilled } from '@element-plus/icons-vue'
 import { request, mfaAwareSuccess } from '@/utils/api'
@@ -262,6 +262,12 @@ const pickerFilteredRules = computed(() => {
 const pickerPagedRules = computed(() => {
   const start = (pickerPage.value - 1) * PICKER_PAGE_SIZE
   return pickerFilteredRules.value.slice(start, start + PICKER_PAGE_SIZE)
+})
+
+// FE71-2（R-12 同族，对照 SecurityPolicies 同名选择器先例）：搜索收窄后高页码
+// 会落在空页，回到第 1 页
+watch(pickerSearch, () => {
+  pickerPage.value = 1
 })
 
 // 已达绑定上限且未绑定本策略的规则不可再选

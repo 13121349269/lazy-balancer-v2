@@ -38,7 +38,7 @@ tcp        0      0 10.0.0.1:443           10.0.0.2:50008         TIME_WAIT`
 	}
 }
 
-func TestParseNetDevTotals_sums_all_non_loopback_interfaces(t *testing.T) {
+func TestParseNetDevTotals_sums_default_route_interface_only(t *testing.T) {
 	original := systemMetricsReadFile
 	systemMetricsReadFile = func(path string) ([]byte, error) {
 		if path == "/proc/net/route" {

@@ -146,6 +146,11 @@ const byId = computed(() => {
 const options = computed<CrsRuleOptionView[]>(() =>
   rules.value.map((r) => ({ id: r.id, ...crsRuleLabelView(r), file: r.file, category: r.category })))
 
+// FE71-3（第 71 轮审计）：openSeq 的 null 形态（页面级加载）当前零调用方——
+// 唯一入口 ensureForDialog 恒传数字 seq，fetchIndex/startFetch 均为模块私有，
+// 各 null 守卫分支现不可达；有意保留防御性签名与守卫不收窄（未来新增页面级
+// 消费方传 null 时自然生效，无需改回）。
+
 const fetchIndex = async (openSeq: number | null): Promise<void> => {
   loading.value = true
   try {

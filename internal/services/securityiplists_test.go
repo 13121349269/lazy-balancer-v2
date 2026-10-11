@@ -1,7 +1,12 @@
 package services
 
 import (
+	"context"
+	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
+	"errors"
+	"io"
 	"reflect"
 	"strings"
 	"testing"
@@ -295,4 +300,79 @@ func TestGetSecurityPoliciesForRule_resolvesRefsAcrossBatch(t *testing.T) {
 func fmtListIDs(ids ...int64) string {
 	raw, _ := json.Marshal(ids)
 	return string(raw)
+}
+
+// ---- SEC-A-F1/RV71-1（第 71 轮 P4）：loadIPListEntriesVia 迭代错误驱动桩 ----
+
+// iplistIterFailConnector 让 security_ip_lists 查询「语句执行成功、迭代第一
+// 步即失败」——只有循环后检查 rows.Err() 才能发现，否则表现为装载成功但
+// 集合缺行（failedIDs 不置位，IPRefMissing 严格模式被绕过）。
+type iplistIterFailConnector struct{}
+
+func (iplistIterFailConnector) Connect(context.Context) (driver.Conn, error) {
+	return iplistIterFailConn{}, nil
+}
+func (iplistIterFailConnector) Driver() driver.Driver { return iplistIterFailDriver{} }
+
+type iplistIterFailDriver struct{}
+
+func (iplistIterFailDriver) Open(string) (driver.Conn, error) { return iplistIterFailConn{}, nil }
+
+type iplistIterFailConn struct{}
+
+func (iplistIterFailConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("unexpected prepare")
+}
+func (iplistIterFailConn) Close() error              { return nil }
+func (iplistIterFailConn) Begin() (driver.Tx, error) { return nil, errors.New("no tx") }
+func (iplistIterFailConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
+	if strings.Contains(query, "FROM security_ip_lists") {
+		return iterFailRows{cols: []string{"id", "entries", "system", "name"}}, nil
+	}
+	return zeroColsRows{}, nil
+}
+
+type iterFailRows struct{ cols []string }
+
+func (r iterFailRows) Columns() []string       { return r.cols }
+func (iterFailRows) Close() error              { return nil }
+func (iterFailRows) Next([]driver.Value) error { return errors.New("注入的列表迭代失败") }
+
+type zeroColsRows struct{}
+
+func (zeroColsRows) Columns() []string         { return []string{"c"} }
+func (zeroColsRows) Close() error              { return nil }
+func (zeroColsRows) Next([]driver.Value) error { return io.EOF }
+
+// SEC-A-F1：迭代错误必须与查询失败同通道上抛，且整块 id 进 failedIDs
+// （fail-closed）——修复前 rows.Err() 未检查，错误被静默吞掉。
+func TestLoadIPListEntriesVia_iterationErrorMarksChunkFailed(t *testing.T) {
+	broken := sql.OpenDB(iplistIterFailConnector{})
+	t.Cleanup(func() { _ = broken.Close() })
+
+	entries, failed, err := loadIPListEntriesVia(broken, []int64{7, 8})
+	if err == nil {
+		t.Fatal("迭代错误必须上抛错误通道（与查询失败同形）")
+	}
+	if !failed[7] || !failed[8] {
+		t.Fatalf("迭代错误须整块 fail-closed 置位 failedIDs: failed=%v", failed)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("迭代失败轮不得残留部分条目: %v", entries)
+	}
+}
+
+// SEC-A-F1 端到端形态：迭代错误下引用该列表的策略必须标记 IPRefMissing
+// 跳过渲染（严格模式）——修复前拿到「静默缺内容的合并集」，ACL/信任面
+// 静默收窄零留痕。
+func TestResolvePolicyIPListRefs_iterationErrorFailsClosed(t *testing.T) {
+	newClusterTestService(t)
+	p := &models.SecurityPolicy{Name: "iterfail-acl", IPACLEnabled: true, IPACLMode: "deny", IPACLList: "[]", IPACLListRefs: "[7]"}
+	broken := sql.OpenDB(iplistIterFailConnector{})
+	t.Cleanup(func() { _ = broken.Close() })
+
+	resolvePolicyIPListRefs([]*models.SecurityPolicy{p}, broken)
+	if !p.IPRefMissing {
+		t.Fatal("迭代错误必须 fail-closed：引用该列表的策略须标记 IPRefMissing 跳过渲染")
+	}
 }

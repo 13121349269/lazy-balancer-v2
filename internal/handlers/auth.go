@@ -373,7 +373,10 @@ type UpdateCurrentUserRequest struct {
 	DisplayName *string `json:"display_name" binding:"omitempty,max=50"`
 	// bcrypt 的字节上限 72——x/crypto v0.55+ 超出即返回 ErrPasswordTooLong
 	// (密码策略:8-24 可打印 ASCII,四类字符)
-	Password string `json:"password" binding:"omitempty,max=24"`
+	// F-SYSR-3 同族（R-12，第 71 轮）：binding 只拦空，长度/复杂度交
+	// validatePasswordPolicy 友好文案（CurrentPassword 例外保留 max=24——
+	// 非新密码，超限必为无效确认输入，防御性拦截无文案损失）。
+	Password string `json:"password" binding:"omitempty"`
 	// M5（用户已批准契约，2026-09 裁定保留——登录后唯一密码确认例外）：提交新
 	// 密码时必须携带当前密码过共享确认门——此前仅凭会话即可改密，劫持会话可直接
 	// 置换密码把原主锁在门外。仅改昵称不要求。
@@ -591,7 +594,7 @@ func (h *Handlers) SetupAdmin(c *gin.Context) {
 	}
 	var req struct {
 		Username    string `json:"username" binding:"required,min=3,max=50"`
-		Password    string `json:"password" binding:"required,min=8,max=24"`
+		Password    string `json:"password" binding:"required"`
 		DisplayName string `json:"display_name" binding:"max=50"`
 	}
 	if !guardAuthJSONBody(c) {

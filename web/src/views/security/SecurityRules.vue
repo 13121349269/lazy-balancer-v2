@@ -338,7 +338,7 @@
               </el-table-column>
               <el-table-column v-if="!ipListDialogReadOnly" label="" width="80" align="center">
                 <template #default="{ $index }">
-                  <el-button link type="danger" size="small" @click="ipListForm.entries.splice(ipListEntryPageStart + $index, 1)">删除</el-button>
+                  <el-button link type="danger" size="small" @click="removeIpListEntry(ipListEntryPageStart + $index)">删除</el-button>
                 </template>
               </el-table-column>
             </el-table>
@@ -835,6 +835,14 @@ const ipListEntriesPaged = computed(() =>
 const addIpListEntry = (): void => {
   ipListForm.value.entries.push({ value: '', remark: '' })
   ipListEntryPage.value = Math.ceil(ipListForm.value.entries.length / ipListEntryPageSize)
+}
+
+// FE71-2：删除末页末条后页码越界会落在空页（空白表格）——splice 后回夹最大页
+//（同 useClampedPagination 的 maxPage 夹紧口径，entries 切片另有共享数组注释见上）
+const removeIpListEntry = (index: number): void => {
+  ipListForm.value.entries.splice(index, 1)
+  const maxPage = Math.max(1, Math.ceil(ipListForm.value.entries.length / ipListEntryPageSize))
+  if (ipListEntryPage.value > maxPage) ipListEntryPage.value = maxPage
 }
 
 // FR66-1：乱序响应守卫（镜像同文件 openRuleContent 的 ruleContentSeq 范式）——

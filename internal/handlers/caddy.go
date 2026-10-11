@@ -41,7 +41,8 @@ var caddyStopCommand = func(adminURL string) *exec.Cmd {
 // LBH-B-U2（第 69 轮）：改为包级 var 作测试注入缝（caddyProcRoot 同模式）。
 var caddyPauseFile = "/tmp/lazy-balancer-caddy-paused"
 
-// caddySupervisorPidFile 是监督器在位标记(entrypoint 子 shell 启动时写入)——
+// caddySupervisorPidFile 是监督器在位标记(entrypoint 父壳在后台化监督器
+// 子 shell 后立即写入——$!=子 shell pid，INFRA-71-1 第 71 轮)——
 // startCaddy 仅在标记在场时走监督器委托路径;测试环境(无监督器)直启不等待。
 var caddySupervisorPidFile = "/tmp/lazy-balancer-caddy-supervisor.pid"
 
@@ -63,6 +64,19 @@ func caddyProcessRunning() bool {
 	return caddyLivePID() > 0
 }
 
+// parseProcStat 解析 /proc/<pid>/stat 行，返回 comm 与状态字节。stat 格式：
+// pid (comm) state ...；comm 可含空格与右括号，取最后一个 ')' 之后的单字符
+// 状态（R/S/D/T/Z…）。畸形行返回 ok=false。caddyLivePID 与 supervisorAlive
+// 共用本解析（LBH-B-N1，第 71 轮：监督器存活判定与 caddy 存活判定同口径排 Z）。
+func parseProcStat(line string) (comm string, state byte, ok bool) {
+	open := strings.Index(line, "(")
+	close := strings.LastIndex(line, ")")
+	if open < 0 || close <= open || close+2 >= len(line) {
+		return "", 0, false
+	}
+	return line[open+1 : close], line[close+2], true
+}
+
 // caddyLivePID 返回首个存活（非 Z 状态）caddy 进程的 pid，无存活进程时返回 0。
 // 与 caddyProcessRunning 共用同一 /proc 遍历（仪表盘「运行中（pid）」展示）。
 func caddyLivePID() int {
@@ -78,18 +92,11 @@ func caddyLivePID() int {
 		if err != nil {
 			continue // 进程可能刚退出，stat 已消失——视为非运行候选，跳过
 		}
-		line := string(content)
-		// stat 格式：pid (comm) state ...；comm 可含空格与右括号，取最后一个 ')'
-		// 之后的单字符状态（R/S/D/T/Z…）。
-		open := strings.Index(line, "(")
-		close := strings.LastIndex(line, ")")
-		if open < 0 || close <= open || close+2 >= len(line) {
+		comm, state, ok := parseProcStat(string(content))
+		if !ok || comm != "caddy" {
 			continue
 		}
-		if line[open+1:close] != "caddy" {
-			continue
-		}
-		if line[close+2] != 'Z' {
+		if state != 'Z' {
 			if pid, err := strconv.Atoi(entry.Name()); err == nil {
 				return pid
 			}
@@ -109,8 +116,14 @@ func caddyAdminReady(adminURL string) bool {
 }
 
 // supervisorAlive LBH-B-1（第 70 轮 P4）：监督器在位判定——pid 标记在场且
-// 所记 pid 仍存活（/proc/<pid> 目录在场；caddyLivePID 同基建，共用
-// caddyProcRoot 注入缝）。标记内容非正整数（旧格式/损坏）视为陈旧。
+// 所记 pid 仍存活。LBH-B-N1（第 71 轮）：存活校验从「/proc/<pid> 目录在场」
+// 升级为读 /proc/<pid>/stat 状态字节——监督器 kill -9 后父进程（PID1 app，
+// Go 不回收非 exec 子进程）未回收期间僵尸滞留 /proc（目录在场、状态字节
+// Z），目录判定恒活会让 startCaddy 恒委托空等 5s 超时、直启兜底永不可达；
+// Z 视死（与 caddyLivePID 同口径，共用 parseProcStat 与 caddyProcRoot 注入
+// 缝）。comm 不校验——pid 标记是权威记录，监督器 subshell 的 comm 形态
+// 不稳定。标记内容非正整数（旧格式/损坏）视为陈旧；stat 缺失/畸形视为死
+// （宁可直启不空等）。
 func supervisorAlive() bool {
 	data, err := os.ReadFile(caddySupervisorPidFile)
 	if err != nil {
@@ -120,8 +133,12 @@ func supervisorAlive() bool {
 	if err != nil || pid <= 0 {
 		return false
 	}
-	info, err := os.Stat(filepath.Join(caddyProcRoot, strconv.Itoa(pid)))
-	return err == nil && info.IsDir()
+	content, err := os.ReadFile(filepath.Join(caddyProcRoot, strconv.Itoa(pid), "stat"))
+	if err != nil {
+		return false // /proc/<pid>/stat 不在场=进程已退出
+	}
+	_, state, ok := parseProcStat(string(content))
+	return ok && state != 'Z'
 }
 
 func startCaddy(adminURL string) error {
@@ -129,7 +146,7 @@ func startCaddy(adminURL string) error {
 	// 等 admin 就绪;标记不在场(测试环境/监督器死亡)直接 spawn。
 	// LBH-B-1（第 70 轮 P4）：在场判定升级为 pid 存活校验——标记文件在但
 	// pid 已死（监督器被杀/容器异常重启残留）时，委托只会空等超时后报错；
-	// 删陈旧标记走直启（与标记不在场同语义）。
+	// 落直启（与标记不在场同语义；标记留存不删，由 N1 存活判定消化）。
 	if supervisorAlive() {
 		_ = os.Remove(caddyPauseFile)
 		supervisorDeadline := time.Now().Add(caddySupervisorWaitTimeout)
@@ -145,7 +162,11 @@ func startCaddy(adminURL string) error {
 		// 重试，返回明确错误即可。
 		return fmt.Errorf("Caddy 监督器在场但 %s 内未拉起就绪的 Caddy（pause 已解除，监督器仍在重试，请稍后复查或检查容器日志）", caddySupervisorWaitTimeout)
 	}
-	_ = os.Remove(caddySupervisorPidFile) // 陈旧标记清除（不在场时为无害 no-op）
+	// LBH-B-N2（第 71 轮）：直启路径不再删 pid 标记——app 检查
+	// supervisorAlive 之后、监督器子 shell 首写标记之前，Remove 会误删刚
+	// 写入的在位标记（永久失标 → 下次直启与监督器拉起双启抢口）。陈旧
+	// 标记（死 pid）留存无害：supervisorAlive 按 pid 存活判定消化；标记
+	// 不在场时 Remove 本是 no-op。僵尸误报半边由 N1 的状态字节判定承接。
 	cmd := caddyRunCommand()
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

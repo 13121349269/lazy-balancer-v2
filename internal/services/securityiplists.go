@@ -143,6 +143,9 @@ func loadIPListEntriesVia(store caddyConfigStore, ids []int64) (map[int64][]stri
 			var system int
 			var name string
 			if err := rows.Scan(&id, &raw, &system, &name); err != nil {
+				// SEC-A-F1（第 71 轮）：Scan 失败不再静默——行丢弃须留痕（该列表
+				// 若被引用，缺失表现为合并集静默缺条目）。
+				Logf("warn", "渲染: security_ip_lists 行扫描失败（该行丢弃）: %v", err)
 				continue
 			}
 			if system == 1 {
@@ -161,6 +164,9 @@ func loadIPListEntriesVia(store caddyConfigStore, ids []int64) (map[int64][]stri
 				// 自定义列表：读 DB entries JSON
 				var list []models.IPListEntry
 				if err := json.Unmarshal([]byte(raw), &list); err != nil {
+					// SEC-A-F1（第 71 轮）：Unmarshal 失败同 Scan 失败——静默
+					// continue 会让该列表在 entries 缺席且零信号。
+					Logf("warn", "渲染: 自定义 IP 列表(id=%d) entries 解析失败（该列表按缺失处理）: %v", id, err)
 					continue
 				}
 				vals := make([]string, 0, len(list))
@@ -170,6 +176,20 @@ func loadIPListEntriesVia(store caddyConfigStore, ids []int64) (map[int64][]stri
 					}
 				}
 				entries[id] = vals
+			}
+		}
+		// SEC-A-F1（第 71 轮 P4）：迭代错误必须显式捕获——rows.Next() 因错误
+		// （而非 EOF）返回 false 时静默走掉会让装载集合缺行而 failedIDs 不置位，
+		// 引用策略拿到「静默缺内容的合并集」绕过 IPRefMissing 严格模式
+		// （ACL/信任面静默收窄零留痕）。与查询失败分支同口径：warn+整块
+		// fail-closed（全入 failedIDs）+首错上抛。
+		if err := rows.Err(); err != nil {
+			Logf("error", "渲染: security_ip_lists 迭代失败（本块 %d 个列表全部按装载失败处理）: %v", len(chunk), err)
+			for _, id := range chunk {
+				failed[id] = true
+			}
+			if firstErr == nil {
+				firstErr = fmt.Errorf("store 迭代 security_ip_lists: %w", err)
 			}
 		}
 		rows.Close()
@@ -368,8 +388,10 @@ func ReadThreatIplistForUI(listName string) ([]string, error) {
 		return nil, err
 	}
 	var vals []string
+	// SEC-A-F2（第 71 轮）：#/; 注释行与渲染侧 readThreatIplistEntries、
+	// 编译侧 ipcompile 同口径过滤（三处单一行过滤契约，勿单方漂移）。
 	for _, line := range strings.Split(string(raw), "\n") {
-		if line = strings.TrimSpace(line); line != "" {
+		if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "#") && !strings.HasPrefix(line, ";") {
 			vals = append(vals, line)
 		}
 	}

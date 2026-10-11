@@ -568,9 +568,9 @@ func TestStartCaddy_supervisorTimeoutDoesNotDirectSpawn(t *testing.T) {
 
 // LBH-B-1（第 70 轮 P4）：监督器 pid 标记在场但 pid 已死（监督器被杀/容器
 // 异常重启残留）——陈旧标记不得让 startCaddy 走委托路径空等超时后报错；
-// 应删陈旧标记落直启（与标记不在场同语义）。RED：修复前委托路径只看标记
-// 在场，admin 已就绪时返回 nil 但标记保留、不直启（下次 startCaddy 仍被
-// 陈旧标记劫持到委托路径）。
+// 应落直启（与标记不在场同语义）。LBH-B-N2（第 71 轮）：直启路径不再删除
+// 陈旧标记——标记留存无害（supervisorAlive 按 pid 存活判定消化），而误删
+// 监督器并发首写的在位标记会永久失标（直启与监督器拉起双启抢口）。
 func TestStartCaddy_staleSupervisorMarkerFallsBackToDirectSpawn(t *testing.T) {
 	// Given：标记在场记死 pid + 空 /proc 视图 + 就绪 admin
 	dir := t.TempDir()
@@ -603,7 +603,8 @@ func TestStartCaddy_staleSupervisorMarkerFallsBackToDirectSpawn(t *testing.T) {
 	// When
 	err := startCaddy(fakeAdmin.URL)
 
-	// Then：直启成功 + 陈旧标记已删（后续 startCaddy 不再被劫持）
+	// Then：直启成功 + 陈旧标记留存但不再劫持后续判定（N2：直启路径不删
+	// 标记；死 pid 由 supervisorAlive 的存活校验消化，下次 startCaddy 仍直启）
 	if err != nil {
 		t.Fatalf("陈旧监督器标记应走直启: %v", err)
 	}
@@ -612,7 +613,60 @@ func TestStartCaddy_staleSupervisorMarkerFallsBackToDirectSpawn(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("未落直启路径（仍被陈旧标记劫持到委托路径）")
 	}
-	if _, statErr := os.Stat(pidFile); !os.IsNotExist(statErr) {
-		t.Fatalf("陈旧标记应被删除, stat err=%v", statErr)
+	if _, statErr := os.Stat(pidFile); statErr != nil {
+		t.Fatalf("直启路径不得删除 pid 标记（LBH-B-N2）, stat err=%v", statErr)
+	}
+	if supervisorAlive() {
+		t.Fatal("陈旧标记（死 pid）不得判活——留存标记不得劫持下次 startCaddy")
+	}
+}
+
+// LBH-B-N1（第 71 轮）：supervisorAlive 不排僵尸态——监督器 kill -9 后
+// 父进程（PID1 app，Go 不回收非 exec 子进程）未回收期间僵尸滞留 /proc
+// （目录在场、状态字节 Z）。修复前只验目录在场 → 恒判活 → startCaddy 恒
+// 委托空等 5s 超时报错，直启兜底永不可达。修复后读 /proc/<pid>/stat 状态
+// 字节，Z 视死 → 落直启恢复。
+func TestStartCaddy_zombieSupervisorFallsBackToDirectSpawn(t *testing.T) {
+	// Given：标记在场记僵尸监督器 pid + 伪 /proc 种 Z 状态 + 就绪 admin
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "supervisor.pid")
+	if err := os.WriteFile(pidFile, []byte("10"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	procRoot := t.TempDir()
+	seedProcStat(t, procRoot, "10", "caddy-superv", 'Z')
+	oldPid, oldPause, oldTimeout, oldProc := caddySupervisorPidFile, caddyPauseFile, caddySupervisorWaitTimeout, caddyProcRoot
+	caddySupervisorPidFile = pidFile
+	caddyPauseFile = filepath.Join(dir, "paused")
+	caddySupervisorWaitTimeout = 300 * time.Millisecond
+	caddyProcRoot = procRoot
+	t.Cleanup(func() {
+		caddySupervisorPidFile, caddyPauseFile, caddySupervisorWaitTimeout, caddyProcRoot = oldPid, oldPause, oldTimeout, oldProc
+	})
+
+	startInvoked := make(chan struct{}, 1)
+	original := caddyRunCommand
+	caddyRunCommand = func() *exec.Cmd {
+		startInvoked <- struct{}{}
+		return exec.Command("sh", "-c", "sleep 1")
+	}
+	t.Cleanup(func() { caddyRunCommand = original })
+
+	fakeAdmin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(fakeAdmin.Close)
+
+	// When
+	err := startCaddy(fakeAdmin.URL)
+
+	// Then：僵尸监督器视死 → 直启成功（而非委托超时报错）
+	if err != nil {
+		t.Fatalf("僵尸监督器应视死直启: %v", err)
+	}
+	select {
+	case <-startInvoked:
+	case <-time.After(time.Second):
+		t.Fatal("未落直启路径（僵尸被误判为活，劫持到委托路径）")
 	}
 }

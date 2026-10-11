@@ -58,9 +58,19 @@ func (h *Handlers) GetAuditLogOptions(c *gin.Context) {
 		out := []optionRow{}
 		for rows.Next() {
 			var o optionRow
-			if err := rows.Scan(&o.Value, &o.Count); err == nil {
-				out = append(out, o)
+			if err := rows.Scan(&o.Value, &o.Count); err != nil {
+				// F-CORE-2（第 71 轮）：单行 Scan 失败须留痕——静默丢行让下拉
+				// 缺项零信号（主查询 500 口径在此分裂为静默）。
+				services.Logf("warn", "审计日志下拉选项（%s）行扫描失败: %v", column, err)
+				continue
 			}
+			out = append(out, o)
+		}
+		// F-CORE-2：迭代错误上抛 fetchErr——SYS42-5 缓存门口径统一（查询失败
+		// 与迭代失败同为故障轮，空/部分结果不得写 60s 缓存）。
+		if err := rows.Err(); err != nil {
+			services.Logf("warn", "审计日志下拉选项（%s）迭代失败: %v", column, err)
+			return out, err
 		}
 		return out, nil
 	}

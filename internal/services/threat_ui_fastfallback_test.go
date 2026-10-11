@@ -38,3 +38,28 @@ func TestReadThreatIplistForUI_fallsBackToFastOnSlave(t *testing.T) {
 		t.Fatalf("vals=%v, want [192.0.2.0/24]（.fast 回退展开）", vals)
 	}
 }
+
+// SEC-A-F2（第 71 轮 P5）：ReadThreatIplistForUI 的 .iplist 文本行过滤补
+// #/; 注释行跳过——与渲染侧 readThreatIplistEntries/编译侧 ipcompile 同口径
+// （潜伏分叉：机器生成文件无注释不触发，人工修补/未来头部注释即分裂）。
+func TestReadThreatIplistForUI_skipsCommentLines(t *testing.T) {
+	restore := OverrideThreatWafDirForTest(t.TempDir())
+	defer restore()
+
+	// Given：.iplist 携带注释行（# 与 ; 两种前缀）与空行
+	content := "# header comment\n198.51.100.7\n\n; tail comment\n"
+	if err := os.WriteFile(filepath.Join(wafDir, "threat-ustc.iplist"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	vals, err := ReadThreatIplistForUI("中科大恶意 IP 名单（USTC）")
+
+	// Then：注释与空行被过滤，仅返回真实条目
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if len(vals) != 1 || vals[0] != "198.51.100.7" {
+		t.Fatalf("vals=%v, want [198.51.100.7]（#/; 注释行过滤）", vals)
+	}
+}

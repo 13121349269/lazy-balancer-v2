@@ -583,7 +583,16 @@ const mergeIpEntryDetails = (
 // CRS 组码 → 「请求 · 942 · SQL 注入」式标签（与安全策略页组名表同口径，由规则文件列表推导；
 // 列表未加载/组已消失时回退裸组码，不阻断明细区）
 const crsGroupLabel = (groupCode: string, crsFiles: readonly CrsRuleFileOption[]): string => {
-  const file = crsFiles.find((r) => new RegExp(`^(?:REQUEST|RESPONSE)-9${groupCode}-`, 'i').test(r.filename))
+  // FE71-4：组码直插 new RegExp——畸形存量组码（含正则元字符）可致构造/匹配抛错
+  // 崩溃抽屉。先 /^\d{2}$/ 门禁，门内形态走 RegExp；非门禁形态退化为裸字符串拼接
+  // 匹配（等价 includes 定位），不构造 RegExp，找不到照旧回退裸组码。
+  let file: CrsRuleFileOption | undefined
+  if (/^\d{2}$/.test(groupCode)) {
+    file = crsFiles.find((r) => new RegExp(`^(?:REQUEST|RESPONSE)-9${groupCode}-`, 'i').test(r.filename))
+  } else {
+    const token = `-9${groupCode}-`.toUpperCase()
+    file = crsFiles.find((r) => r.filename.toUpperCase().includes(token))
+  }
   if (!file) return groupCode
   const phase = /^RESPONSE-/i.test(file.filename) ? '响应' : '请求'
   return `${phase} · 9${groupCode} · ${file.category}`
@@ -796,6 +805,9 @@ const ipv4ToLong = (ip: string): number => {
   return (((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0)
 }
 
+// FE71-5：仅 IPv4 判定（ipv4ToLong 对 IPv6 形态恒 -1 → false）——IPv6 CIDR 条目
+// 在命中定位（entryMatchesIp）侧恒漏报，引擎侧拦截不受影响（Caddy 链全量生效）；
+// 有 IPv6 命中定位需求时补 :: 前缀位比较，勿依赖本函数「未命中」结论。
 const ipInCidr = (ip: string, cidr: string): boolean => {
   const idx = cidr.indexOf('/')
   if (idx < 0) return false

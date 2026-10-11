@@ -34,7 +34,8 @@ const (
 	TaskStatusCancelled TaskStatus = "cancelled"
 	TaskStatusDisabled  TaskStatus = "disabled"
 	TaskStatusQueued    TaskStatus = "queued"
-	TaskStatusStopped   TaskStatus = "stopped" // 常驻可控循环已停止
+	// 方案 A（2026-10-12）：stopped 退役——状态列只承载执行语义（调度语义归
+	// 开关列 loop_on&&enabled）；disabled 仅 cert-job 退役行集产出。
 )
 
 // TaskInfo 是单任务族的聚合视图。
@@ -50,7 +51,6 @@ type TaskInfo struct {
 	Cancellable  bool         `json:"cancellable"`          // 运行中可手动取消（仅下载类）
 	Controllable bool         `json:"controllable"`         // 常驻循环可启停（start/stop/restart）
 	Triggerable  bool         `json:"triggerable"`          // 支持手动触发（ManualRun 语义族）
-	Toggleable   bool         `json:"toggleable"`           // 调度开关可暂停/恢复（ToggleFn 声明族）
 	StartedAt    string       `json:"started_at,omitempty"` // 常驻族启动时刻；其他类型空
 	LogSizeBytes int64        `json:"log_size_bytes"`       // 本任务日志文件大小（字节）
 	LoopOn       bool         `json:"loop_on"`              // 调度开关当前态（定时/循环/常驻调度列绑定值）
@@ -174,7 +174,7 @@ func collectEngineFamilies(te *taskengine.Engine) []TaskInfo {
 			ID: m.ID, Name: m.Name, Description: m.Description,
 			Category: m.Category, Kind: TaskKind(m.Kind),
 			Controllable: m.Controllable, Cancellable: m.Cancelable, Triggerable: m.CanTrigger,
-			Toggleable: m.Toggleable, Enabled: m.Enabled, DetailHint: m.Family,
+			Enabled: m.Enabled, DetailHint: m.Family,
 			LoopOn: m.LoopOn,
 		}
 		// 节奏：循环=间隔，定时=排程槽，常驻=自管理，触发=手动
@@ -197,19 +197,18 @@ func collectEngineFamilies(te *taskengine.Engine) []TaskInfo {
 		}
 		// L1-13：LatestRun 单次查询复用（曾每任务两查）
 		latestRun := te.LatestRun(m.ID)
-		// 状态分流（v2.0 四类型）：
-		// · 镜像优先（manager 运行中/队列计数/角色/cert-waiting-ca 门控）
-		// · 常驻 → 实际运行态（Run 存活=运行中；调度开未跑=空闲；调度关=已停止）
-		// · 定时/循环/触发 → 最近真实运行终态（空闲/失败/运行中）
+		// 状态分流（方案 A，2026-10-12 用户裁定）：状态列只承载执行语义
+		// （运行中/空闲/失败；cert-job 退役行「已禁用」走 cert-job 行集）。
+		// 调度语义（调度关/业务关）全部归开关列——前端并判 loop_on && enabled。
+		// stopped/disabled 不再作为状态列产出（原「stopped 仅常驻」模型与
+		// disabled 三源混用同轮废除）。
 		if m.StatusMirror != "" {
 			ti.Status = TaskStatus(m.StatusMirror)
 		} else if m.Kind == taskengine.KindDaemon {
 			if m.Running {
 				ti.Status = TaskStatusRunning
-			} else if m.LoopOn {
-				ti.Status = TaskStatusIdle
 			} else {
-				ti.Status = TaskStatusStopped
+				ti.Status = TaskStatusIdle // 未跑=空闲（调度关由开关列表达）
 			}
 		} else {
 			ti.Status = TaskStatusIdle
@@ -221,12 +220,6 @@ func collectEngineFamilies(te *taskengine.Engine) []TaskInfo {
 					ti.Status = TaskStatusRunning
 				}
 			}
-		}
-		if !m.LoopOn && m.Kind != taskengine.KindOneshot && ti.Status == TaskStatusIdle {
-			ti.Status = TaskStatusDisabled // 调度关闭（如 cert-waiting-ca 默认态）
-		}
-		if !m.Enabled && ti.Status == TaskStatusIdle {
-			ti.Status = TaskStatusDisabled // 业务开关联动（自动更新关闭/备份未启用——2026-10-01 用户裁定）
 		}
 		// 下一槽：定时=NextSlotFn（声明式）；循环=last+interval 兜底
 		ti.NextRunAt = m.NextSlot

@@ -604,7 +604,7 @@ func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
 }
 
 // securityPolicySelectColumns 是 ListSecurityPolicies/GetSecurityPolicy 共用的
-// 29 表达式投影:与 scanSecurityPolicyInto 逐列对应、同默认值、同相对顺序
+// 31 表达式投影:与 scanSecurityPolicyInto 逐列对应、同默认值、同相对顺序
 // （canonical 副本：internal/services/security.go scanSecurityPolicyByID、
 // internal/services/caddy.go loadSecurityPolicyContext 批量预载）。services/ 归
 // 并行任务持有且两侧列集本就不同，此处按既定回退方案保持 handlers 本地副本——
@@ -2463,6 +2463,13 @@ func (h *Handlers) BatchBindSecurityPolicies(c *gin.Context) {
 			}
 			existing = append(existing, pid)
 		}
+		// R71-⑬（第 71 轮，R36/R37 口径）：迭代失败显式 500——漏查会把「部分
+		// 读取（空 existing）」当成功继续 merge/写入，静默丢绑定差异。
+		if err := existingRows.Err(); err != nil {
+			existingRows.Close()
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+			return
+		}
 		existingRows.Close()
 		final := uniqueIDs
 		if req.Mode == "merge" {
@@ -2656,6 +2663,13 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 		}
 		boundRules = append(boundRules, ruleID)
 	}
+	// R71-⑬（第 71 轮，R36/R37 口径）：迭代失败显式 500——漏查会以「零绑定
+	// 规则」走完全量重映射并删除原策略，静默丢防护绑定。
+	if err := ruleRows.Err(); err != nil {
+		ruleRows.Close()
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
 	ruleRows.Close()
 	type skippedRule struct {
 		RuleID string `json:"rule_id"`
@@ -2770,7 +2784,7 @@ func (h *Handlers) GetSecurityPolicyBindings(c *gin.Context) {
 	policies := make([]models.SecurityPolicy, 0, len(policyIDs))
 	for _, policyID := range policyIDs {
 		var p models.SecurityPolicy
-		// C5 SUG-1：与 securityPolicySelectColumns 同 29 列同序投影（COALESCE 默认值），
+		// C5 SUG-1：与 securityPolicySelectColumns 同 31 列同序投影（COALESCE 默认值），
 		// 任一可空列 NULL 不再使整接口 500；WHERE enabled=1 语义不变（NULL-enabled
 		// 仍被 SQL 过滤）。
 		if err := scanSecurityPolicyRow(db.DB.QueryRow(`SELECT `+securityPolicySelectColumns+`
@@ -2804,8 +2818,9 @@ func ip2RegionShortenName(name string) string {
 // formatIP2RegionLocation 把 ip2region 原始 region（"国家|省|市|ISP|国家代码"）
 // 格式化为展示文本：中国 → "中国·广东·深圳·电信"（运营商有值且非 "0" 时追加，
 // v4 xdb 第 4 段为 ISP——实测 114.114.114.114=中国|江苏省|南京市|0|CN、
-// 180.101.245.246=中国|江苏省|南京市|电信|CN），海外国家 → "海外"（按需求不
-// 展示 ISP），未知/畸形 → ""。
+// 180.101.245.246=中国|江苏省|南京市|电信|CN）；海外 → "国家·省州·城市·ISP(IDC)"
+// 精确拼接（2026-09-13 用户裁定，弹框展示完整精度，列表侧由前端 compactLocation
+// 精简）；Reserved → "保留地址"；未知/畸形 → ""。
 func formatIP2RegionLocation(region string) string {
 	fields := strings.Split(region, "|")
 	if len(fields) < 5 || fields[0] == "" || fields[0] == "0" {
@@ -3470,6 +3485,9 @@ func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 		for policyRows.Next() {
 			var p models.SecurityPolicy
 			if err := scanSecurityPolicy(policyRows, &p); err != nil {
+				// SEC-B-F3（第 71 轮审计）：行 scan 失败不得静默跳行——计入
+				// firstErr 走 R35 D2 显式报错口径（全零面板与「无攻击」不可区分）。
+				trackErr(err)
 				continue
 			}
 			fs := models.PolicyTypeFeatures(&p)
@@ -4257,6 +4275,10 @@ func resolveCreatePolicyType(req *models.CreateSecurityPolicyRequest) (string, e
 // stage3 保留 WAF+拦截页。
 // mode 归 off（阶段 0/1/2 策略无 WAF 引擎面）。
 func normalizeOutOfStageFields(req *models.CreateSecurityPolicyRequest, policyType string) {
+	falseVal := false
+	// SEC-B-F2（第 71 轮审计）：stage1/2/3 的 IPWhitelistEnabled 归 &falseVal
+	// 而非 nil——nil 经 policyWhitelistDefault 落默认 1，与 Update 路径
+	// （&falseVal → 0）形状漂移；显式 false 与 Update 同形落 0。
 	switch policyType {
 	case models.PolicyTypeStage0:
 		req.Mode = "off"
@@ -4273,7 +4295,7 @@ func normalizeOutOfStageFields(req *models.CreateSecurityPolicyRequest, policyTy
 		req.CRSRuleGroups, req.CRSExcludedRules, req.CustomRules = "[]", "[]", "[]"
 		req.RateLimitEnabled, req.RateLimitRPS, req.RateLimitBurst = false, 0, 0
 		req.WAFCheckResponse, req.LogRequestBody = false, false
-		req.IPWhitelistEnabled = nil
+		req.IPWhitelistEnabled = &falseVal
 		req.IPWhitelist, req.IPWhitelistRefs = "[]", "[]"
 	case models.PolicyTypeStage2:
 		req.Mode = "off"
@@ -4281,7 +4303,7 @@ func normalizeOutOfStageFields(req *models.CreateSecurityPolicyRequest, policyTy
 		req.WAFCheckResponse, req.LogRequestBody = false, false
 		req.IPACLEnabled = false
 		req.IPACLList, req.IPACLListRefs = "[]", "[]"
-		req.IPWhitelistEnabled = nil
+		req.IPWhitelistEnabled = &falseVal
 		req.IPWhitelist, req.IPWhitelistRefs = "[]", "[]"
 		req.IPBlacklist = "[]"
 		req.GeoIPMode, req.GeoIPCountries = "off", "[]"
@@ -4290,7 +4312,7 @@ func normalizeOutOfStageFields(req *models.CreateSecurityPolicyRequest, policyTy
 	case models.PolicyTypeStage3:
 		req.IPACLEnabled = false
 		req.IPACLList, req.IPACLListRefs = "[]", "[]"
-		req.IPWhitelistEnabled = nil
+		req.IPWhitelistEnabled = &falseVal
 		req.IPWhitelist, req.IPWhitelistRefs = "[]", "[]"
 		req.IPBlacklist = "[]"
 		req.GeoIPMode, req.GeoIPCountries = "off", "[]"

@@ -366,10 +366,13 @@ func (h *Handlers) AutoBackupSettings(c *gin.Context) {
 		}
 		backups = append(backups, view)
 	}
-	var lastRunValue *string
-	if lastRun.Valid && lastRun.String != "" {
-		lastRunValue = &lastRun.String
+	// R71-⑫（第 71 轮主审补漏，R36/R37 口径）：迭代失败显式 500——
+	// 部分列表 + 200 会掩盖存储故障。
+	if err := rows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取备份列表失败: " + err.Error()})
+		return
 	}
+	var lastRunValue *string
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "ok", Data: gin.H{
 		"enabled": enabled, "frequency": freq, "time": hhmm, "day": day, "keep": keep,
 		"sections": sections, "last_run": lastRunValue, "backups": backups,

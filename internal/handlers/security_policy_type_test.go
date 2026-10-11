@@ -310,7 +310,45 @@ func TestCreateSecurityPolicy_stage1ClearsTrustFields(t *testing.T) {
 	if whitelist != "[]" || wlRefs != "[]" {
 		t.Fatalf("stage1 trust fields=(wl %s, refs %s), want cleared (trust belongs to stage 0)", whitelist, wlRefs)
 	}
-	_ = wlEnabled
+	// SEC-B-F2（第 71 轮审计）：显式 stage1/2/3 的 ip_whitelist_enabled 归 0
+	// 落库（与 Update 路径 &falseVal 同形），不再走 policyWhitelistDefault(nil)=1。
+	if wlEnabled {
+		t.Fatal("stage1 ip_whitelist_enabled=true, want 0（阶段外信任开关归零）")
+	}
+}
+
+// SEC-B-F2（第 71 轮审计）：显式 stage2/stage3 创建同样把 ip_whitelist_enabled
+// 归 0 落库——此前 normalizeOutOfStageFields 置 nil 使 INSERT 落默认 1，
+// 与 Update 路径（&falseVal → 0）形状漂移。
+func TestCreateSecurityPolicy_stage23ZeroWhitelistEnabled(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router := newSecurityRouter(t)
+	for _, tc := range []struct{ label, policyType, body, policyName string }{
+		{"stage2", "stage2", `{"name":"rl-noTrust","policy_type":"stage2","rate_limit_enabled":true,"rate_limit_rps":100,"ip_whitelist_enabled":true}`, "rl-noTrust"},
+		{"stage3", "stage3", `{"name":"waf-noTrust","policy_type":"stage3","mode":"blocking","ip_whitelist_enabled":true}`, "waf-noTrust"},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/security/policies", strings.NewReader(tc.body))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			if response.Code != http.StatusCreated && response.Code != http.StatusOK {
+				t.Fatalf("create %s status=%d body=%s, want 2xx", tc.policyType, response.Code, response.Body.String())
+			}
+			var wlEnabled bool
+			var policyType string
+			if err := db.DB.QueryRow(`SELECT COALESCE(policy_type,''), COALESCE(ip_whitelist_enabled,1) FROM security_policies WHERE name=?`, tc.policyName).
+				Scan(&policyType, &wlEnabled); err != nil {
+				t.Fatal(err)
+			}
+			if policyType != tc.policyType {
+				t.Fatalf("policy_type=%q, want %q（测试夹具失效）", policyType, tc.policyType)
+			}
+			if wlEnabled {
+				t.Fatalf("%s ip_whitelist_enabled=true, want 0（阶段外信任开关归零）", tc.policyType)
+			}
+		})
+	}
 }
 
 func TestSplitSecurityPolicy_trustBecomesStage0ChildWithDetection(t *testing.T) {

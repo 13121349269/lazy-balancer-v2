@@ -972,3 +972,14 @@ func TestComputeBackoff_retryAfterClampedTo3h(t *testing.T) {
 		t.Fatalf("computeBackoff(2, 0)=%v, want 2h (ladder)", got)
 	}
 }
+
+// F-SYSR-4（第 71 轮审计）：注释承诺剥「句点或逗号」而 TrimRight 只剥句点
+// ——逗号结尾的 "retry after 3600s," 此前落入解析失败被整段丢弃。
+func TestExtractRetryAfterFromError_stripsTrailingCommaAndPeriod(t *testing.T) {
+	if d := extractRetryAfterFromError("rate limited, retry after 3600s,"); d != 3600*time.Second {
+		t.Fatalf("comma-suffixed seconds=%v, want 3600s", d)
+	}
+	if d := extractRetryAfterFromError("rate limited. retry after 3600s."); d != 3600*time.Second {
+		t.Fatalf("period-suffixed seconds=%v, want 3600s", d)
+	}
+}

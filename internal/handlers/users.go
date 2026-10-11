@@ -25,7 +25,7 @@ func (h *Handlers) ListUsers(c *gin.Context) {
 	}
 	defer rows.Close()
 
-	var users []models.UserResponse
+	var users = make([]models.UserResponse, 0) // F-SYSR-1（第 71 轮）：空表出口归一 []，与 scanAPIKeys 同形（null 会使前端判空分裂）
 	for rows.Next() {
 		var u models.User
 		var mfaEnabled int
@@ -100,7 +100,7 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 
 	var req struct {
 		Username    *string `json:"username" binding:"omitempty,min=3,max=50"`
-		Password    *string `json:"password" binding:"omitempty,max=24"`
+		Password    *string `json:"password" binding:"omitempty"` // F-SYSR-3（第 71 轮）：长度交 validatePasswordPolicy（友好文案，R63-P2-5 收口）——bcrypt 物理上限 72 由策略 24 上限先行拦截
 		Role        *string `json:"role"`
 		DisplayName *string `json:"display_name" binding:"omitempty,max=50"`
 	}
@@ -344,6 +344,12 @@ func (h *Handlers) DeleteUser(c *gin.Context) {
 			return
 		}
 		cascadeKeyIDs = append(cascadeKeyIDs, keyID)
+	}
+	// F-SYSR-2（第 71 轮）：级联 Key 清单迭代失败须留痕——cascadeKeyIDs 缺项
+	// 意味着对应 Key 的白名单解析缓存不被清扫（孤儿缓存驻留，无越权面；
+	// 删除照常——warn-only 口径）。
+	if err := keyRows.Err(); err != nil {
+		services.Logf("warn", "删除用户 %d：级联 Key 清单读取迭代失败（部分 Key 白名单缓存可能未清扫）: %v", id, err)
 	}
 	keyRows.Close()
 	if _, err := tx.ExecContext(c.Request.Context(), "DELETE FROM api_keys WHERE created_by = ?", id); err != nil {

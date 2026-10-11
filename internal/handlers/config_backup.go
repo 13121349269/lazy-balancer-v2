@@ -2913,8 +2913,10 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 	recordAudit(c, "重载", "Caddy服务", action+"配置后自动重载")
 	// 2026-09-07 审计 L4（round5 F2 修正）：导入成功后清除陈旧 caddy_apply_error
 	// ——但 reseed 失败时不清（reseed 的 caddyApplyNoteLocked 可能刚写入
-	// 失败标记，无条件清除会把真实失败横幅抹掉）。
-	if !reseedBlockPageNeeded || reseedApplyFailed == false {
+	// 失败标记，无条件清除会把真实失败横幅抹掉）。F-SYS-2（第 71 轮）：
+	// 未走 reseed 路径时 reseedApplyFailed 恒 false（只在上方 reseed 块内置位），
+	// 故双重否定守卫等价于 !reseedApplyFailed。
+	if !reseedApplyFailed {
 		h.recordCaddyApplyResult(nil)
 	}
 	responseWarnings := skipWarnings

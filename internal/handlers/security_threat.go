@@ -55,6 +55,13 @@ func (h *Handlers) GetThreatLib(c *gin.Context) {
 		}
 		rawRows = append(rawRows, s)
 	}
+	// SEC-C-N1（第 71 轮 P4·家族漏收敛）：迭代错误（rows.Err）不得以
+	// 「部分/空列表 + 200」返回——与 R36/R37 在总览/事件列表建立的
+	// 「残缺列表不得以 200」口径对齐（Scan 失败分支同响应形）。
+	if err := rows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取威胁情报库失败: " + err.Error()})
+		return
+	}
 	totalEntries := 0
 	for _, s := range rawRows {
 		listName := db.ThreatListNameBySource(s.Name)

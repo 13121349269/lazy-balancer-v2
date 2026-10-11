@@ -178,6 +178,20 @@ func (p *Provider) cleanUp(ctx context.Context, zone, tokenFQDN, value string, b
 			if resolveErr != nil {
 				err = errors.Join(err, resolveErr)
 			} else {
+				// ADNS71-1（第 71 轮审计）：自愈换新 domain_id 后 bookkeeping 键
+				// 随之换代——残留旧键条目（kept 未选中之值/failed 回填）同步迁移
+				// 新键。否则后续 cleanUp/Present 按新键查找，旧键条目永不可达，
+				// 「failed 回填供后续清理重试」失效（仅内存模式；ownership 存储
+				// 不含 domain_id，无此问题）。
+				if p.ownership == nil {
+					p.mu.Lock()
+					if freshKey := freshID + "|" + subDomain; freshKey != key {
+						p.owned[freshKey] = append(p.owned[freshKey], p.owned[key]...)
+						delete(p.owned, key)
+						key = freshKey
+					}
+					p.mu.Unlock()
+				}
 				domainID = freshID
 				err = p.deleteRecord(ctx, freshID, recordID)
 			}

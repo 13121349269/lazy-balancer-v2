@@ -720,8 +720,9 @@ func extractRetryAfterFromError(errText string) time.Duration {
 	if idx := strings.Index(lower, "retry after"); idx != -1 {
 		suffix := errText[idx+len("retry after"):]
 		suffix = strings.TrimSpace(suffix)
-		// Strip a trailing period or comma.
-		suffix = strings.TrimRight(suffix, ".")
+		// Strip a trailing period or comma (F-SYSR-4：此前只剥句点，注释与
+		// 行为不符——逗号结尾的 "3600s," 会整段落入解析失败)。
+		suffix = strings.TrimRight(suffix, ".,")
 		// Try parsing as seconds if it looks like "3600s".
 		if strings.HasSuffix(suffix, "s") {
 			if sec, err := strconv.Atoi(strings.TrimSuffix(suffix, "s")); err == nil && sec > 0 {

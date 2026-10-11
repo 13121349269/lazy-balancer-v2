@@ -2166,13 +2166,13 @@ const validateCertificate = async () => {
   }
 
   // Validate private key format
-  const keyValid = 
-    (keyPEM.includes('-----BEGIN PRIVATE KEY-----') && keyPEM.includes('-----END PRIVATE KEY-----')) ||
-    (keyPEM.includes('-----BEGIN RSA PRIVATE KEY-----') && keyPEM.includes('-----END RSA PRIVATE KEY-----')) ||
-    (keyPEM.includes('-----BEGIN EC PRIVATE KEY-----') && keyPEM.includes('-----END EC PRIVATE KEY-----'))
-
-  if (!keyValid) {
-    certInfo.error = '私钥格式无效'
+  // FE71-1：旧哨兵串 $$PRIVATEKEY_* 全仓零产生方（后端现行掩码=tls_key 空+
+  // tls_key_set，F50-7），真实 PEM 曾被误判「私钥格式无效」致 /certificates/parse
+  // 永不发起——改认真实 PEM 头（RSA/EC/PKCS#8/OPENSSH/ENCRYPTED 等
+  // * PRIVATE KEY 形态）；本门仅 advisory，终裁仍由后端 parseTLSCertificate
+  // （tls.X509KeyPair）判定。
+  if (!/-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----/.test(keyPEM)) {
+    certInfo.error = '私钥格式无效，须以 -----BEGIN ... PRIVATE KEY----- 开头'
     return
   }
 

@@ -751,8 +751,10 @@ func TestDNSPodCleanUp_freshDomainIDDeletesOnce(t *testing.T) {
 
 // U5-1 回归形状二 + U5-2 基线钉：重试仍失败照旧记 failed（不循环）——内存
 // 模式下失败记录须回到 owned 表（failed 存储的唯一消费者），供同进程后续
-// 清理重试。
-func TestDNSPodCleanUp_staleRetryStillFailsReappendsOwnedRecord(t *testing.T) {
+// 清理重试。ADNS71-1（第 71 轮审计）：自愈重解析已把 domain_id 换代（1→2），
+// 回填与残留条目必须落在新键——旧键条目对后续 cleanUp/Present 永不可达，
+// 「failed 回填供后续清理重试」形同虚设（旧钉测钉住了这个自相矛盾形态）。
+func TestDNSPodCleanUp_staleRetryStillFailsReappendsUnderFreshKey(t *testing.T) {
 	// Given: a stale cached id and an API that also fails the fresh-id retry
 	seedDomainIDCache(t, "id,token", map[string]string{})
 	transport := &staleRemoveTransport{currentID: "1", records: map[string]string{}}
@@ -766,22 +768,39 @@ func TestDNSPodCleanUp_staleRetryStillFailsReappendsOwnedRecord(t *testing.T) {
 	// When
 	err := provider.CleanUp(t.Context(), "example.com", "_acme-challenge.example.com.")
 
-	// Then: exactly one invalidation+retry (no loop), the failure is
-	// reported and the record returns to the in-memory owned table
+	// Then: exactly one invalidation+retry (no loop), the failure is reported
+	// and the record returns to the in-memory owned table under the FRESH key
 	if err == nil {
 		t.Fatal("clean up swallowed the persistent deletion failure")
 	}
 	transport.mu.Lock()
-	defer transport.mu.Unlock()
+	removes := append([][2]string(nil), transport.removes...)
+	transport.mu.Unlock()
 	want := [][2]string{{"1", "300"}, {"2", "300"}}
-	if !reflect.DeepEqual(transport.removes, want) {
-		t.Fatalf("Record.Remove sequence=%v, want %v（重试一次后停止，不循环）", transport.removes, want)
+	if !reflect.DeepEqual(removes, want) {
+		t.Fatalf("Record.Remove sequence=%v, want %v（重试一次后停止，不循环）", removes, want)
 	}
 	provider.mu.Lock()
-	entries := provider.owned["1|_acme-challenge"]
+	entries := provider.owned["2|_acme-challenge"]
+	_, oldKeyLeft := provider.owned["1|_acme-challenge"]
 	provider.mu.Unlock()
 	if len(entries) != 1 || entries[0].recordID != "300" {
-		t.Fatalf("owned entries=%+v, want failed record 300 re-appended", entries)
+		t.Fatalf("owned entries=%+v, want failed record 300 re-appended under fresh key 2", entries)
+	}
+	if oldKeyLeft {
+		t.Fatal("stale-key entries must migrate to the fresh key after self-heal (ADNS71-1)")
+	}
+
+	// And：可达性——回填记录在下一轮 cleanUp 真正被重试删除（fresh-id 放行后）
+	transport.flipStaleDomain("1", "2", false)
+	if err := provider.CleanUp(t.Context(), "example.com", "_acme-challenge.example.com."); err != nil {
+		t.Fatalf("retry cleanup after self-heal: %v", err)
+	}
+	transport.mu.Lock()
+	defer transport.mu.Unlock()
+	wantRetry := [][2]string{{"1", "300"}, {"2", "300"}, {"2", "300"}}
+	if !reflect.DeepEqual(transport.removes, wantRetry) {
+		t.Fatalf("Record.Remove sequence=%v, want %v（回填记录按新键被重删）", transport.removes, wantRetry)
 	}
 }
 

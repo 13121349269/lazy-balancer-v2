@@ -177,3 +177,48 @@ func TestTriggerSystemTask_doubleClickRaceNoMisleadingFailAudit(t *testing.T) {
 		t.Skip("50 次尝试内双击竞态未成形（预检均拦截）——未验证到目标分支")
 	}
 }
+
+// LNK71-1（第 71 轮 P5）：手动触发落在 skipped 终态时仍落「触发失败」审计
+// ——threat/crs/ip2region Run 体 demote 中止返回 ErrTaskSkipped（TASK-L5
+// 哨兵，task_runs 已落 skipped 行），TASK-2 修 ErrAlreadyRunning 时同族扫描
+// 未延伸到该哨兵。skipped=「非故障放弃」，复记「触发失败」是语义失真
+// （用户看到失败而任务体明确声明放弃）。修复：goroutine 内静默
+// （镜像 ErrAlreadyRunning 分支）。
+func TestTriggerSystemTask_skippedTerminalNoFailAudit(t *testing.T) {
+	initTaskEngineForTest(t)
+	newBackupTestHandlers(t)
+	te := services.TaskEngine()
+	if err := te.Register(taskengine.Descriptor{
+		ID: "skip-probe", Family: "测试", Name: "跳过探针", Kind: taskengine.KindOneshot,
+		Run: func(taskengine.RunContext) error { return taskengine.ErrTaskSkipped },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before := countTriggerFailAudit(t)
+	r, _ := taskMonitorRouter()
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, httptest.NewRequest(http.MethodPost, "/system/tasks/skip-probe/trigger", nil))
+	if resp.Code != http.StatusOK {
+		t.Fatalf("手动触发应 200, got %d %s", resp.Code, resp.Body.String())
+	}
+	// Trigger→runNow 同步执行：轮询 task_runs 落 skipped 终态（证明任务体
+	// 已执行且哨兵已回传 handler goroutine 的 Trigger 调用方）。
+	deadline := time.Now().Add(3 * time.Second)
+	skipped := false
+	for time.Now().Before(deadline) {
+		var status string
+		if err := db.DB.QueryRow(`SELECT status FROM task_runs WHERE task_id='skip-probe' ORDER BY id DESC LIMIT 1`).Scan(&status); err == nil && status == "skipped" {
+			skipped = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !skipped {
+		t.Fatal("skip-probe 未落 skipped 终态——任务未执行")
+	}
+	// 补偿路径（审计/日志）落库窗口（与双击竞态测试同手法）
+	time.Sleep(200 * time.Millisecond)
+	if got := countTriggerFailAudit(t) - before; got != 0 {
+		t.Fatalf("skipped 终态（非故障放弃）落了 %d 条「触发失败」审计——语义失真", got)
+	}
+}

@@ -46,6 +46,10 @@ func run() error {
 	// Load configuration
 	cfg := config.Load(*configPath)
 
+	// F-SYSR-5（第 71 轮·声明）：SetFlags(0) 是下方 services.NewApplicationLogWriter
+	// 日志级别过滤的隐式契约——过滤按行首 "WARNING:"/"ERROR:" 前缀判定（tz.go
+	// applicationLogWriter），标准 log 前缀会破坏该判定。此处改 flags 须同步
+	// applicationLogWriter 的前缀剥离逻辑（同注释互指）。
 	log.SetFlags(0)
 	var logWriter io.Writer = os.Stdout
 	var runtimeLogFile string
@@ -141,8 +145,10 @@ func run() error {
 	// then materialize cert files from DB, then apply Caddy config on startup
 	// SECLB23-P1-1(第 23 轮审计):审计日志目录必须在首次 ApplyConfigOnStartup
 	// 前保证存在——coraza NewWAF 时 OpenFile 不建父目录,缺失=/load 拒收。
+	// INFRA-71-5（第 71 轮）：告警改走 services.Logf("warn")——绕过日志
+	// 级别门（ApplyLogLevel 已在上方装配）会让 warn 级过滤对它失效。
 	if err := services.EnsureWafAuditDir(); err != nil {
-		log.Printf("warning: create waf audit dir failed: %v", err)
+		services.Logf("warn", "create waf audit dir failed: %v", err)
 	}
 	// WAF 文件目录按 data_dir 派生（容器 /app/data → /app/waf 恒等；本地开发
 	// 落到数据目录同级）。须在首个渲染（ApplyConfigOnStartup）之前。

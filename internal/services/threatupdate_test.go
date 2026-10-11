@@ -1,6 +1,9 @@
 package services
 
 import (
+	"context"
+	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"lazy-balancer-v2/internal/taskengine"
@@ -744,5 +747,75 @@ func TestWireThreatRun_failureLandsTaskRunsFailed(t *testing.T) {
 	}
 	if status != "failed" {
 		t.Fatalf("task_runs status=%q, want failed（失败轮曾记 success——终态失真）", status)
+	}
+}
+
+// SEC-C-N3（第 71 轮 P5）：CancelRunning 补 running 门——runCancel 一次运行后
+// 不清空，无运行中任务时（running=false）仍返回 true、与注释「无运行中任务
+// 返回 false」不符；对齐 CRS/IP2Region 同形（cancel!=nil && running）。
+func TestThreatCancelRunning_falseWhenIdleAfterRun(t *testing.T) {
+	overrideWafDirForTest(t)
+	newClusterTestService(t)
+	setupThreatTest(t, nil, nil, nil)
+
+	m := GetThreatUpdateManager()
+	if err := m.RunUpdate("manual", nil); err != nil {
+		t.Fatalf("run update: %v", err)
+	}
+	// 运行已结束：CancelRunning 必须返回 false（无运行中任务）
+	if m.CancelRunning() {
+		t.Fatal("CancelRunning()=true after run finished, want false（runCancel 残留致 idle 返 true）")
+	}
+}
+
+// R71-⑪（第 71 轮主审补漏）：threatListsReferencedByEnabledPolicy 的引用查询
+// 迭代失败（rows.Err）须按「被引用」处理（fail-closed）——与查询失败/解析
+// 失败同口径；漏查会跳过名单重载，引用该名单的启用策略渲染不收敛。
+type refsFailingConnector struct{}
+
+func (refsFailingConnector) Connect(context.Context) (driver.Conn, error) {
+	return refsFailingConn{}, nil
+}
+
+func (refsFailingConnector) Driver() driver.Driver { return refsFailingDriver{} }
+
+type refsFailingDriver struct{}
+
+func (refsFailingDriver) Open(string) (driver.Conn, error) { return refsFailingConn{}, nil }
+
+type refsFailingConn struct{}
+
+func (refsFailingConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("unexpected prepare")
+}
+
+func (refsFailingConn) Close() error { return nil }
+
+func (refsFailingConn) Begin() (driver.Tx, error) { return nil, errors.New("no tx") }
+
+func (refsFailingConn) QueryContext(_ context.Context, _ string, _ []driver.NamedValue) (driver.Rows, error) {
+	// 语句执行成功、迭代第一步即失败——只有检查 rows.Err() 才能被发现
+	return refsFailingRows{}, nil
+}
+
+type refsFailingRows struct{}
+
+func (refsFailingRows) Columns() []string { return []string{"ip_acl_list_refs", "ip_whitelist_refs"} }
+
+func (refsFailingRows) Close() error { return nil }
+
+func (refsFailingRows) Next([]driver.Value) error { return errors.New("注入的引用迭代失败") }
+
+func TestThreatListsReferenced_iterationErrorTreatedAsReferenced(t *testing.T) {
+	overrideWafDirForTest(t)
+	newClusterTestService(t)
+	broken := sql.OpenDB(refsFailingConnector{})
+	t.Cleanup(func() { _ = broken.Close() })
+	orig := db.DB
+	db.DB = broken
+	t.Cleanup(func() { db.DB = orig })
+
+	if !threatListsReferencedByEnabledPolicy([]int{424242}) {
+		t.Fatal("迭代错误须按被引用处理（true）——与查询失败/解析失败同口径（fail-closed）")
 	}
 }

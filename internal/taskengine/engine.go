@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -70,9 +71,7 @@ type Descriptor struct {
 	// BootSync：Oneshot 任务在引擎初始化尾部同步执行一次（trigger=startup）
 	// ——启动型任务的唯一执行通道（曾 main.go 直调+legacy 记录旁路）。
 	BootSync   bool
-	StatusFn   func() string    // 状态镜像
-	ToggleFn   func(bool) error // 调度开关 setter
-	ToggleName string
+	StatusFn   func() string // 状态镜像
 	Cancelable bool
 	RunsOn     Role
 	MasterOnly bool
@@ -566,9 +565,18 @@ func (e *Engine) History(id string, limit int) []RunRecord {
 	for rows.Next() {
 		var r RunRecord
 		if err := rows.Scan(&r.ID, &r.TaskID, &r.Family, &r.Trigger, &r.Operator, &r.Status, &r.StartedAt, &r.FinishedAt, &r.DurationMs, &r.Message); err != nil {
+			// TASK-A3（第 71 轮）：Scan 失败须留痕——静默 continue 会让单行
+			// 丢失零信号（历史页缺行无从排查）。
+			log.Printf("WARNING: taskengine: 任务历史 %s 行扫描失败（跳过该行）: %v", id, err)
 			continue
 		}
 		out = append(out, r)
+	}
+	// TASK-A3（第 71 轮）：迭代错误须留痕——rows.Next() 因错误（而非 EOF）
+	// 返回 false 时表现为「部分历史 + 静默」。返回形状不变（已读行降级展示），
+	// 与同文件 Stats24hHourlySeries 同口径。
+	if err := rows.Err(); err != nil {
+		log.Printf("WARNING: taskengine: 任务历史 %s 迭代失败（部分历史缺失）: %v", id, err)
 	}
 	return out
 }
@@ -616,6 +624,11 @@ func (e *Engine) runNow(id, trigger, operator string) (int64, error) {
 	// F-L1-68-04（第 68 轮）：caddy-restart（Caddy 崩溃自愈 watcher 通道）
 	// 同样落 [start]——曾仅 manual/startup 放行，自愈轮只有 [done]，排障
 	// 看不到执行起点。
+	// TASK-A1（第 71 轮）声明：auto 轮不写 [start] 是刻意取舍——高频族
+	// （security-events-ingestion/config-watchdog 等分钟级轮）每轮补一行
+	// [start] 会把任务日志淹成生命周期噪音（[done] 行已带触发与耗时）；
+	// 低频触发形态（manual/startup/caddy-restart）保留 [start] 供排障定位
+	// 执行起点。
 	switch trigger {
 	case "manual", "startup":
 		taskLogAppend(id, fmt.Sprintf("[start] %s触发", map[bool]string{true: "启动", false: "手动"}[trigger == "startup"]))
@@ -921,8 +934,6 @@ type TaskMeta struct {
 	StatusMirror string `json:"status_mirror"`
 	Controllable bool   `json:"controllable"`
 	Cancelable   bool   `json:"cancelable"`
-	Toggleable   bool   `json:"toggleable"`
-	ToggleName   string `json:"toggle_name"`
 	LoopOn       bool   `json:"loop_on"`
 	Running      bool   `json:"running"` // Daemon：Run 实际存活（角色门/停止后=false）
 	CanTrigger   bool   `json:"can_trigger"`
@@ -947,8 +958,6 @@ func (e *Engine) Lookup(id string) (TaskMeta, bool) {
 		// 触发均可手动调度；常驻族恒不可（启停语义，调度开关+重启承担）。
 		CanTrigger:   r.desc.Kind != KindDaemon,
 		Cancelable:   r.desc.Cancelable,
-		Toggleable:   r.desc.ToggleFn != nil,
-		ToggleName:   r.desc.ToggleName,
 		LoopOn:       loopOn,
 		Running:      running,
 		Enabled:      true,
@@ -997,8 +1006,6 @@ func (e *Engine) DescribeAll() []TaskMeta {
 			Description: s.desc.Description, Category: s.desc.Category, Kind: s.desc.Kind,
 			CanTrigger:   s.desc.Kind != KindDaemon,
 			Cancelable:   s.desc.Cancelable,
-			Toggleable:   s.desc.ToggleFn != nil,
-			ToggleName:   s.desc.ToggleName,
 			LoopOn:       s.loopOn,
 			Running:      s.running,
 			Enabled:      true,
@@ -1086,11 +1093,20 @@ func (e *Engine) Stats24hHourlySeries() []TaskHourlyStat {
 	for rows.Next() {
 		var h string
 		var s, f int
-		if err := rows.Scan(&h, &s, &f); err == nil {
-			if i, ok := idx[h]; ok {
-				out[i].Success, out[i].Failed = s, f
-			}
+		if err := rows.Scan(&h, &s, &f); err != nil {
+			// LNK71-2（第 71 轮）：Scan 失败须留痕（此前 err == nil 才落桶、
+			// 失败静默——TASK-1 同批触碰未同步收敛的同族漏点）。
+			log.Printf("WARNING: taskengine: 24h 分小时桶行扫描失败（该桶零填）: %v", err)
+			continue
 		}
+		if i, ok := idx[h]; ok {
+			out[i].Success, out[i].Failed = s, f
+		}
+	}
+	// LNK71-2（第 71 轮）：迭代错误须留痕——此前表现为「部分桶 + 静默」。
+	// 24 桶零填形状不变（图表降级为空序列）。
+	if err := rows.Err(); err != nil {
+		log.Printf("WARNING: taskengine: 24h 分小时统计迭代失败（部分小时桶缺失）: %v", err)
 	}
 	return out
 }

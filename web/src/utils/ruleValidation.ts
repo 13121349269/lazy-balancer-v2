@@ -134,6 +134,9 @@ export const validatePathRules = (rules: readonly PathRuleInput[]): string | nul
       // eslint-disable-next-line no-control-regex
       if (/[\x00-\x1f\x7f]/.test(target)) return `第 ${rowNumber} 条路径：跳转地址含非法字符`
       if (!target.startsWith('/') && !target.startsWith('http://') && !target.startsWith('https://')) return `第 ${rowNumber} 条路径：跳转地址须为 http(s):// 绝对地址或 / 开头路径`
+      // FE71-6：与后端 rule_features.go:464 同句——301 跳转与响应内容互斥
+      //（UI 正常切换模式会清空内容，此处防回读载荷/残留表单态双携，后端恒 400）。
+      if (rule.response_body || rule.response_content_type) return `第 ${rowNumber} 条路径：301 跳转与响应内容互斥（请清空内容/格式）`
       if (rule.upstreams !== null || rule.upstream_path) return `第 ${rowNumber} 条路径：301 跳转模式与上游配置互斥`
       continue
     }

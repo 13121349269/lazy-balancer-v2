@@ -180,6 +180,9 @@ func Logf(level, format string, args ...any) {
 	}
 }
 
+// applicationLogWriter 按 "WARNING:"/"ERROR:" 行首前缀做级别过滤（F-SYSR-5，
+// 第 71 轮·声明）——隐式依赖 main.go log.SetFlags(0)：标准 log 的时间戳/
+// 文件名前缀会顶掉级别前缀使过滤全数落空。两侧契约互指（见 main.go 同名注释）。
 type applicationLogWriter struct {
 	w io.Writer
 }

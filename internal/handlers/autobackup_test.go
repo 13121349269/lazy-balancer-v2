@@ -1,8 +1,13 @@
 package handlers
 
 import (
+	"context"
+	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -805,5 +810,96 @@ func TestRunAutoBackupOnce_backupDirPerm0700(t *testing.T) {
 	}
 	if perm := info.Mode().Perm(); perm != 0o700 {
 		t.Fatalf("backup dir perm=%o, want 700（目录内容含私钥与凭证明文）", perm)
+	}
+}
+
+// backupListFailingConnector：global_config 设置行查询成功返回缺省值，
+// auto_backups 列表查询「语句成功、迭代即失败」——注入 AutoBackupSettings
+// 备份列表循环的 rows.Err() 故障（R71-⑫，R36/R37 口径）。
+type backupListFailingConnector struct{}
+
+func (backupListFailingConnector) Connect(context.Context) (driver.Conn, error) {
+	return backupListFailingConn{}, nil
+}
+
+func (backupListFailingConnector) Driver() driver.Driver { return backupListFailingDriver{} }
+
+type backupListFailingDriver struct{}
+
+func (backupListFailingDriver) Open(string) (driver.Conn, error) {
+	return backupListFailingConn{}, nil
+}
+
+type backupListFailingConn struct{}
+
+func (backupListFailingConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("unexpected prepare")
+}
+
+func (backupListFailingConn) Close() error { return nil }
+
+func (backupListFailingConn) Begin() (driver.Tx, error) { return nil, errors.New("no tx") }
+
+func (backupListFailingConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
+	switch {
+	case strings.Contains(query, "FROM global_config"):
+		return &backupSettingsRow{}, nil
+	case strings.Contains(query, "FROM auto_backups"):
+		return backupFailingIterRows{}, nil
+	default:
+		return nil, fmt.Errorf("unexpected query: %s", query)
+	}
+}
+
+type backupSettingsRow struct{ done bool }
+
+func (r *backupSettingsRow) Columns() []string {
+	return []string{"enabled", "frequency", "time", "day", "keep", "sections", "last_run"}
+}
+
+func (r *backupSettingsRow) Close() error { return nil }
+
+func (r *backupSettingsRow) Next(dest []driver.Value) error {
+	if r.done {
+		return io.EOF
+	}
+	r.done = true
+	row := []driver.Value{int64(0), "daily", "03:00", int64(1), int64(7), nil, nil}
+	copy(dest, row)
+	return nil
+}
+
+type backupFailingIterRows struct{}
+
+func (backupFailingIterRows) Columns() []string {
+	return []string{"id", "filename", "created_at", "status", "size_bytes", "sections", "trigger_type", "message", "app_version"}
+}
+
+func (backupFailingIterRows) Close() error { return nil }
+
+func (backupFailingIterRows) Next([]driver.Value) error {
+	return errors.New("注入的备份列表迭代失败")
+}
+
+func TestAutoBackupSettings_backupListIterationFailureReturns500(t *testing.T) {
+	// Given：设置行可读、备份列表迭代失败（语句成功、迭代即败）
+	h := newBackupTestHandlers(t)
+	broken := sql.OpenDB(backupListFailingConnector{})
+	t.Cleanup(func() { _ = broken.Close() })
+	orig := db.DB
+	db.DB = broken
+	t.Cleanup(func() { db.DB = orig })
+
+	router := gin.New()
+	router.GET("/settings/auto-backup", h.AutoBackupSettings)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/settings/auto-backup", nil))
+
+	// Then：迭代错误显式 500（修复前部分列表 + 200 掩盖存储故障）
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s, want 500", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "读取备份列表失败") {
+		t.Fatalf("body=%s, want explicit backup-list failure message", response.Body.String())
 	}
 }

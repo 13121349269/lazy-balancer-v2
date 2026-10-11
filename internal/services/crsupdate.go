@@ -490,8 +490,6 @@ func (m *CRSUpdateManager) downloadTarballLogged(ctx context.Context, tag, destP
 	return nil
 }
 
-// StatusSnapshot returns the in-memory task view, falling back to the stored
-// terminal state when no update has run since process start.
 // CancelRunning 取消当前运行中的更新（下载阶段中断）。无运行中任务返回 false。
 func (m *CRSUpdateManager) CancelRunning() bool {
 	m.mu.Lock()
@@ -505,6 +503,8 @@ func (m *CRSUpdateManager) CancelRunning() bool {
 	return true
 }
 
+// StatusSnapshot returns the in-memory task view, falling back to the stored
+// terminal state when no update has run since process start.
 func (m *CRSUpdateManager) StatusSnapshot() CRSUpdateStatusSnapshot {
 	m.mu.Lock()
 	state := m.state

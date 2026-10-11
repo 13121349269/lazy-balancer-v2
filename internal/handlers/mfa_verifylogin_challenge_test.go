@@ -155,3 +155,25 @@ func TestMFAVerifyLogin_wrongCodeKeepsChallengeRetryable(t *testing.T) {
 		t.Fatalf("retry status=%d body=%s, want 200", second.Code, second.Body.String())
 	}
 }
+
+// F-SYS-1（第 71 轮审计）：挑战查询的 DB 故障（非 ErrNoRows）不得与「无效
+// 挑战」混同 401——基础设施错误必须显式 500，无效挑战（ErrNoRows）仍 401
+// 且不泄露具体原因。
+func TestMFAVerifyLogin_dbFailureReturns500Not401(t *testing.T) {
+	// Given：有效夹具后破坏挑战表——查询报「no such table」而非 ErrNoRows
+	seedMFAChallengeLoginFixture(t, "db-err-tok", 0)
+	if _, err := db.DB.Exec(`DROP TABLE mfa_challenges`); err != nil {
+		t.Fatalf("drop challenges table: %v", err)
+	}
+	h := &Handlers{cfg: &config.Config{JWTSecret: "test-secret"}}
+	router := gin.New()
+	router.POST("/auth/mfa/verify", h.MFAVerifyLogin)
+
+	// When
+	recorder := postMFAVerify(t, router, "db-err-tok", "123456")
+
+	// Then：DB 故障=500（修复前与无效挑战混同为 401）
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s, want 500", recorder.Code, recorder.Body.String())
+	}
+}

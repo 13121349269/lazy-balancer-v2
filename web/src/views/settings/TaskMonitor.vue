@@ -140,8 +140,10 @@
         <el-table-column label="调度" width="92">
           <template #default="{ row }">
             <!-- v2.0 调度开关统一：定时=暂停/恢复排程、循环=暂停/恢复循环、
-                 常驻=启停自管理循环——绑定 loop_on 走 /toggle（后端按 Kind 路由） -->
-            <el-switch v-if="row.kind !== 'oneshot'" :model-value="row.loop_on" :disabled="!canOperate" @change="(v: string | number | boolean) => onToggle(row, !!v)" />
+                 常驻=启停自管理循环——绑定 loop_on 走 /toggle（后端按 Kind 路由）。
+                 方案 A（2026-10-12）：并判 enabled（业务开关联动，如自动更新关闭/
+                 备份未启用）——业务关时开关显示「已暂停」，状态列不再用 disabled 表达 -->
+            <el-switch v-if="row.kind !== 'oneshot'" :model-value="!!row.loop_on && row.enabled !== false" :disabled="!canOperate" @change="(v: string | number | boolean) => onToggle(row, !!v)" />
             <!-- 触发类（含 cert-job 动态行）：统一显示禁用开关保持页面一致性——
                  仅手动/代码触发执行（2026-10-01 用户裁定；cert-job 特例已消除） -->
             <el-tooltip v-else content="触发类任务不可调度——仅手动/代码触发执行" placement="top" :offset="8" :show-after="150" :show-arrow="false">
@@ -232,8 +234,8 @@
         <el-descriptions :column="2" border size="small" class="tm-detail-descs">
           <el-descriptions-item label="运行节奏">{{ detailTask.cadence || '—' }}</el-descriptions-item>
           <el-descriptions-item label="调度开关">
-            <!-- v2.0 统一口径：非触发类显示 loop_on 态（定时/循环=排程暂停、常驻=运行/停止） -->
-            <el-tag v-if="detailTask.kind !== 'oneshot'" size="small" :type="detailTask.loop_on ? 'success' : 'warning'" effect="plain">{{ detailTask.loop_on ? '开启' : '已暂停' }}</el-tag>
+            <!-- v2.0 统一口径：非触发类显示 loop_on 态；方案 A（2026-10-12）：并判 enabled（业务关=已暂停） -->
+            <el-tag v-if="detailTask.kind !== 'oneshot'" size="small" :type="detailTask.loop_on && detailTask.enabled !== false ? 'success' : 'warning'" effect="plain">{{ detailTask.loop_on && detailTask.enabled !== false ? '开启' : '已暂停' }}</el-tag>
             <el-tooltip v-else content="触发类任务不可调度——仅手动/代码触发执行" placement="top" :offset="8" :show-after="150" :show-arrow="false">
               <el-tag size="small" type="info" effect="plain">不可调度</el-tag>
             </el-tooltip>
@@ -327,7 +329,7 @@ interface TaskInfo {
   kind: 'scheduled' | 'daemon' | 'periodic' | 'oneshot'
   status: string; cancellable: boolean; controllable?: boolean; triggerable?: boolean
   last_run?: TaskRunInfo; next_run_at?: string; runs_24h: number; success_24h: number; fail_24h: number
-  loop_on?: boolean; started_at?: string; log_size_bytes?: number // 常驻族：循环启停态（调度列开关绑定值）/ 引擎启动时刻
+  loop_on?: boolean; enabled?: boolean; started_at?: string; log_size_bytes?: number // 常驻族：循环启停态/业务开关联动（方案 A：开关列并判 loop_on&&enabled）/ 引擎启动时刻
 }
 interface RunRecord {
   id: number; task_id: string; family: string; trigger: string; operator?: string; status: string
@@ -490,6 +492,13 @@ const onTrigger = async (row: TaskInfo) => {
   fetchTasks()
 }
 const onToggle = async (row: TaskInfo, enabled: boolean) => {
+  // 方案 A 配套：业务开关联动关闭（自动更新/自动备份等设置页开关）时，
+  // 开关列显示「已暂停」来自 enabled=false——此时拨动只改 loop_on 无实际
+  // 效果且开关仍显示关。给出解释并引导到对应设置页，不误改调度开关。
+  if (row.enabled === false) {
+    ElMessage.warning('该任务的业务开关已关闭（如自动更新/自动备份设置），请到对应设置页开启后调度才会运行')
+    return
+  }
   // 常驻族停止前确认（功能中断影响大——如安全事件采集停摆）
   if (!enabled && row.kind === 'daemon') {
     try {
@@ -527,7 +536,7 @@ const detailTone = computed((): 'primary' | 'success' | 'warning' | 'danger' | u
   const st = detailTask.value?.status
   if (st === 'failed') return 'danger'
   if (st === 'running') return 'primary'
-  if (st === 'stopped' || st === 'disabled') return 'warning'
+  if (st === 'disabled') return 'warning' // 仅 cert-job 退役行（方案 A：stopped 已退役）
   return undefined
 })
 const isCertJobRow = (id: string): boolean => id.startsWith('cert-job:')
@@ -600,10 +609,11 @@ onUnmounted(closeLogs)
 
 
 // ===== 文案 =====
-// 状态五态统一（R63 设计重构）：引擎族只呈现 running/idle/failed/stopped/disabled；
-// cert-job 行的 queued 等队列态经 certJobStatusLabel 回退链显示
+// 状态列方案 A（2026-10-12 用户裁定）：只承载执行语义——running/idle/failed
+// （cert-job 行另走 certJobStatusLabel 全状态集：queued/waiting_ca/disabled=已禁用）。
+// stopped/disabled 已从引擎族状态产出退役（调度语义归开关列 loop_on&&enabled）。
 const statusLabels: Record<string, string> = {
-  running: '运行中', idle: '空闲', failed: '失败', stopped: '已停止', disabled: '已暂停',
+  running: '运行中', idle: '空闲', failed: '失败',
 }
 const statusLabel = (s: string) => statusLabels[s] || certJobStatusLabel(s as CertJobStatus)
 // v2.0 四类型：定时(蓝)/常驻(绿)/循环(青)/触发(橙)
@@ -685,7 +695,7 @@ const fmtDuration = (ms?: number) => {
 .tm-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--tm-c, #9aa0b5); box-shadow: 0 0 6px var(--tm-c, transparent); }
 .tm-status[data-status="running"] { --tm-c: #4f8cff; }
 .tm-status[data-status="failed"] { --tm-c: #f87171; }
-.tm-status[data-status="stopped"], .tm-status[data-status="disabled"] { --tm-c: #62687f; }
+.tm-status[data-status="disabled"] { --tm-c: #62687f; } /* 方案 A：stopped 退役；disabled 仅 cert-job 退役行 */
 .tm-status[data-status="idle"] { --tm-c: #9aa0b5; }
 .tm-tag-periodic {
   --el-tag-bg-color: rgba(0, 168, 168, 0.1);
