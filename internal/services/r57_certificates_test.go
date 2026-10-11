@@ -44,13 +44,28 @@ func TestCertificateService_scheduleDeploymentRetry_reentry_does_not_deadlock(t 
 }
 
 // TestWaitDoneOrTimeout_returns_on_closed_channel（R57 A-#2 语义验证）：
-// done 关闭即快速返回；慢路径（30s 超时放弃）不在测试内等待真实 30s。
+// done 关闭即快速返回；慢路径（默认 30s 超时放弃）不在测试内等待真实 30s。
 func TestWaitDoneOrTimeout_returns_on_closed_channel(t *testing.T) {
 	done := make(chan struct{})
 	close(done)
 	start := time.Now()
-	waitDoneOrTimeout(done, 1, "测试")
+	// CERT-C（第 70 轮）：timeout 参数 0 回退默认 30s（一致性收敛——调用点
+	// 统一传 s.cancelWaitTimeout，测试缝与 cancelDeploymentRetry/Stop 同模式）。
+	waitDoneOrTimeout(done, 0, 1, "测试")
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Fatalf("waitDoneOrTimeout took %v on closed channel", elapsed)
+	}
+}
+
+// TestWaitDoneOrTimeout_consumes_custom_timeout（CERT-C 第 70 轮）：
+// 非零 timeout 被真实消费——未关闭的 done 在自定义短超时后放行，而非
+// 固定 30s。
+func TestWaitDoneOrTimeout_consumes_custom_timeout(t *testing.T) {
+	done := make(chan struct{})
+	defer close(done)
+	start := time.Now()
+	waitDoneOrTimeout(done, 30*time.Millisecond, 1, "测试")
+	if elapsed := time.Since(start); elapsed < 30*time.Millisecond {
+		t.Fatalf("waitDoneOrTimeout returned early (%v), want custom timeout consumed", elapsed)
 	}
 }

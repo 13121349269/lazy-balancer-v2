@@ -434,6 +434,10 @@ func (h *Handlers) OIDCCallback(c *gin.Context) {
 		// JIT 开户:默认普通角色;用户名取 preferred_username→email 本地部分→sub,
 		// 冲突时后缀去重(不绑定本地账号,同名共存)。TrimSpace 先于空值兜底
 		// (OIDC-5:纯空白 preferred_username 不得穿过兜底产出空用户名)。
+		// SYS-1（第 70 轮裁定·不修+声明）：用户名策略（auth.go usernamePolicyRe
+		// `^[a-z][a-z0-9]*$`）仅约束本地创建/改名，OIDC JIT 有意豁免——
+		// preferred_username 是 IdP 源属性，强行归一会破坏身份链（JIT 命中键是
+		// (issuer,subject)，撞 username 走后缀去重，无身份混同）。
 		base := strings.TrimSpace(claims.PreferredUsername)
 		if base == "" && claims.Email != "" {
 			base = strings.TrimSpace(strings.SplitN(claims.Email, "@", 2)[0])
@@ -533,10 +537,7 @@ func (h *Handlers) OIDCCallback(c *gin.Context) {
 // 唯一语义差异:node_mode 的判定错误路径——本函数单测分支查询失败按零值判
 // slave,respondLoginWithMFA 查询失败保持 master(U7a-P5-1,见下方分支注释)。
 func (h *Handlers) issueOIDCJWT(userID int, username, role string, passwordVersion int64) (string, time.Time, error) {
-	expireMinutes := 20
-	if err := db.DB.QueryRow("SELECT COALESCE(jwt_expire_minutes,20) FROM global_config WHERE id=1").Scan(&expireMinutes); err != nil || expireMinutes <= 0 || expireMinutes > 1440 {
-		expireMinutes = 20
-	}
+	expireMinutes := loginExpireMinutes() // SYS-3：与密码登录共用单源钳制（auth.go）
 	now := time.Now()
 	jtiBytes := make([]byte, 32)
 	if _, err := rand.Read(jtiBytes); err != nil {

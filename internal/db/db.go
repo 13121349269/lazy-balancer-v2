@@ -2701,6 +2701,10 @@ func hasExactStatusConstraint(tableSQL string, requiredStatuses []string) bool {
 
 // migrateCertJobsStatusConstraint rebuilds cert_jobs to enforce the allowed
 // status CHECK constraint and the 'queued' default value on existing databases.
+// CORE-3（第 70 轮审计裁定，边界声明防重报）：此类 CHECK 收敛迁移仅适用于
+// 跨版本演化过的表（cert_jobs 的约束集随版本多次扩充，存量库存在旧形态）；
+// auto_backups/task_runs 等同版引入的表以 fresh DDL 为准——首版 DDL 即含
+// 全量约束，不存在需要收敛的旧库形态，刻意不建同型迁移。
 func migrateCertJobsStatusConstraint() error {
 	var tableSQL string
 	if err := DB.QueryRow("SELECT sql FROM sqlite_master WHERE type='table' AND name='cert_jobs'").Scan(&tableSQL); err != nil {
@@ -3007,6 +3011,8 @@ func normalizeRuleTimestampsMigration() error {
 // 传输归一同一清单。此前仅导出侧归一（CL10-P2-3「主端存储值不变」），用户
 // 裁定改为存储也归零：主端 DB、导出 canonical、从端落库三面同值，快照缓存
 // 的 canonical 变化由本迁移写侧触发 cluster_version bump 随下轮同步收敛。
+// WHERE 谓词与归一函数逐字对齐：enable_tls=1 即入选（CL-2，第 70 轮审计——
+// 此前要求证书材料非空会漏掉「TCP+enable_tls=1+双空证书」形态的存量行）。
 func migrateTCPRuleDeadFields() error {
 	res, err := DB.Exec(`UPDATE lb_rules SET
 		host_header='', health_check_path='', enable_compress=0, compress_types='',
@@ -3016,7 +3022,7 @@ func migrateTCPRuleDeadFields() error {
 			COALESCE(host_header,'')<>'' OR COALESCE(health_check_path,'')<>''
 			OR enable_compress=1 OR COALESCE(compress_types,'')<>''
 			OR request_body_max_size_mb<>0 OR upstream_keepalive_timeout<>0 OR server_tokens_hidden<>0
-			OR (enable_tls=1 AND (COALESCE(tls_cert,'')<>'' OR COALESCE(tls_key,'')<>''))
+			OR enable_tls=1
 		)`)
 	if err != nil {
 		return fmt.Errorf("failed to zero TCP dead fields: %w", err)

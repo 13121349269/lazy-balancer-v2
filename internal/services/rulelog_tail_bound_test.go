@@ -103,3 +103,75 @@ func TestRemoveRuleLogFiles_siblingRuleRotationsUntouched(t *testing.T) {
 		t.Fatalf("兄弟规则活文件被误删: %v", err)
 	}
 }
+
+// LBS-A-1（第 70 轮 P4）：ReadRuleLogTail 两段式倒扫改写的窗口等价钉——
+// 多块窗口/块边界跨行/cap 边界/未终结尾行/少于 maxLines 五形状的 content 与
+// offset 期望按旧实现语义手算钉死（改写前后同输入同输出，逐字节等价）。
+func TestReadRuleLogTail_windowEquivalenceShapes(t *testing.T) {
+	t.Run("多块窗口取尾5行", func(t *testing.T) {
+		var b strings.Builder
+		for i := 1; i <= 30000; i++ {
+			fmt.Fprintf(&b, "L%07d\n", i)
+		}
+		writeRuleLogFile(t, "eq-multi", []byte(b.String()))
+		content, offset := ReadRuleLogTail("eq-multi", 5)
+		var want strings.Builder
+		for i := 29996; i <= 30000; i++ {
+			fmt.Fprintf(&want, "L%07d\n", i)
+		}
+		if content != want.String() {
+			t.Fatalf("多块尾窗内容不等价: got %q, want %q", content, want.String())
+		}
+		if wantOffset := int64(b.Len() - want.Len()); offset != wantOffset {
+			t.Fatalf("offset=%d, want %d", offset, wantOffset)
+		}
+	})
+	t.Run("行跨64KB块边界", func(t *testing.T) {
+		data := append(append(bytes.Repeat([]byte{'A'}, 65530), '\n'), append(bytes.Repeat([]byte{'B'}, 100), '\n')...)
+		writeRuleLogFile(t, "eq-boundary", data)
+		content, offset := ReadRuleLogTail("eq-boundary", 1)
+		if content != string(bytes.Repeat([]byte{'B'}, 100))+"\n" {
+			t.Fatalf("块边界行尾窗不等价: %q", content)
+		}
+		if offset != 65531 {
+			t.Fatalf("offset=%d, want 65531（B 行起点）", offset)
+		}
+		content2, offset2 := ReadRuleLogTail("eq-boundary", 2)
+		if content2 != string(data) || offset2 != 0 {
+			t.Fatalf("maxLines=2 应整窗: offset=%d len=%d", offset2, len(content2))
+		}
+	})
+	t.Run("cap边界部分尾窗", func(t *testing.T) {
+		size := 5 << 20
+		data := make([]byte, size)
+		for i := range data {
+			data[i] = 'C'
+		}
+		data[0] = '\n'
+		writeRuleLogFile(t, "eq-cap", data)
+		content, offset := ReadRuleLogTail("eq-cap", 10)
+		if l := int64(len(content)); l != maxBackwardScan {
+			t.Fatalf("cap 部分尾窗长度=%d, want %d", l, maxBackwardScan)
+		}
+		if offset != int64(size)-maxBackwardScan {
+			t.Fatalf("offset=%d, want %d", offset, int64(size)-maxBackwardScan)
+		}
+		if offset+int64(len(content)) != int64(size) {
+			t.Fatal("offset 不变量破坏: offset+len != size")
+		}
+	})
+	t.Run("未终结尾行计为一行", func(t *testing.T) {
+		writeRuleLogFile(t, "eq-partial", []byte("a\nb\nc"))
+		content, offset := ReadRuleLogTail("eq-partial", 2)
+		if content != "b\nc" || offset != 2 {
+			t.Fatalf("未终结尾行不等价: content=%q offset=%d", content, offset)
+		}
+	})
+	t.Run("行数少于maxLines整窗返回", func(t *testing.T) {
+		writeRuleLogFile(t, "eq-short", []byte("x\ny\n"))
+		content, offset := ReadRuleLogTail("eq-short", 100)
+		if content != "x\ny\n" || offset != 0 {
+			t.Fatalf("短文件不等价: content=%q offset=%d", content, offset)
+		}
+	})
+}

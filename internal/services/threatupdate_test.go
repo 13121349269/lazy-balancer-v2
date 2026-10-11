@@ -19,11 +19,7 @@ import (
 func overrideWafDirForTest(t *testing.T) {
 	t.Helper()
 	restoreWaf := OverrideThreatWafDirForTest(t.TempDir())
-	restoreLog := SetUpdateLogDirForTest(t.TempDir())
-	t.Cleanup(func() {
-		restoreWaf()
-		restoreLog()
-	})
+	t.Cleanup(restoreWaf)
 }
 
 // 威胁情报库名单化（v2.3.2 重构）测试基座：三源指向 httptest 桩；

@@ -1364,9 +1364,6 @@ onUnmounted(() => {
    nowrap+overflow hidden)把条件列多标签裁剪成单行——3/4 条件不可见。本列
    恢复换行展示(居中保持,scoped 属性选择器特异性高于全局规则)。 */
 :deep(.el-table .cell:has(.el-tag)) { flex-wrap: wrap; row-gap: 4px; }
-/* 自管标签行(EP 2.14.4 规避,同 ClusterModeCard 范式):复刻 EP
- * .el-form-item__label 计算样式(右对齐/32px 行高/12px 右内边距),
- * 宽度对齐本弹框 label-width=80px */
 
 .crs-card :deep(.el-card__header) .crs-header { display: flex; justify-content: space-between; align-items: center; width: 100%; }
 .crs-card :deep(.el-card__header) .crs-header-title { display: flex; align-items: center; gap: 12px; }

@@ -27,7 +27,10 @@ docs/
 .DS_Store
 .env
 *.env
-AGENTS.md
+# INFRA-A2（第 70 轮）：** 前缀匹配嵌套实例（cmd/server、web、internal、
+# internal/handlers、internal/services 均有 AGENTS.md）——裸文件名只匹配根路径。
+# story.md 仅根路径存在，无嵌套实例，保持原样。
+**/AGENTS.md
 # 本地工具会话目录（第 68 轮审计 U8b-1：防构建上下文形态变化泄漏本地
 # 会话/审计产物进中间层）
 .omp/

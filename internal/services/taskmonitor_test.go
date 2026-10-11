@@ -1,6 +1,7 @@
 package services
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -35,5 +36,47 @@ func TestCollectSystemTasks_nilDBGuards(t *testing.T) {
 	}
 	if out[0].Cadence == "" {
 		t.Fatal("nil DB 时节奏列应有兜底文案（每 1 分钟）")
+	}
+}
+
+// TASK-3（第 70 轮 P4）：disabled 证书行 Triggerable 必须 false——行级重试门
+// 对 disabled 恒 429（certJobRetryBlocked 首条），按钮亮着是交互噪音（点了必 429）。
+func TestCollectCertJobRows_disabledRowNotTriggerable(t *testing.T) {
+	oldDB, oldM, oldA := db.DB, db.MetricsDB, db.AuditDB
+	if err := db.Initialize(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = db.Close()
+		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldM, oldA
+	})
+	seedCertJobRowForTaskMonitor(t, "lb_tm_disabled", "disabled.example.com", "disabled")
+	seedCertJobRowForTaskMonitor(t, "lb_tm_queued", "queued.example.com", "queued")
+
+	rows := collectCertJobRows()
+	byDomain := map[string]TaskInfo{}
+	for _, r := range rows {
+		byDomain[strings.TrimPrefix(r.Name, "ACME 签发 · ")] = r
+	}
+	disabled, ok := byDomain["disabled.example.com"]
+	if !ok {
+		t.Fatalf("disabled 行缺失: %+v", rows)
+	}
+	if disabled.Triggerable {
+		t.Fatal("disabled 证书行 Triggerable=true——重试门恒 429，按钮应为禁用态")
+	}
+	queued, ok := byDomain["queued.example.com"]
+	if !ok {
+		t.Fatalf("queued 行缺失: %+v", rows)
+	}
+	if !queued.Triggerable {
+		t.Fatal("queued 证书行 Triggerable 应保持 true（回归）")
+	}
+}
+
+func seedCertJobRowForTaskMonitor(t *testing.T, ruleID, domain, status string) {
+	t.Helper()
+	if _, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id,domain,status) VALUES (?,?,?)`, ruleID, domain, status); err != nil {
+		t.Fatalf("seed cert job %s: %v", ruleID, err)
 	}
 }

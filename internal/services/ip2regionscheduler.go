@@ -77,9 +77,6 @@ func (m *IP2RegionUpdateManager) schedulerTick(now time.Time) {
 	if err := db.DB.QueryRow("SELECT auto_update FROM security_ip2region_version WHERE id=1").Scan(&autoUpdate); err != nil || !autoUpdate {
 		return
 	}
-	if m.IsRunning() {
-		return
-	}
 	next := versionTableNextSlot("security_ip2region_version", now)
 	var nextStr string
 	if err := db.DB.QueryRow("SELECT COALESCE(next_update,'') FROM security_ip2region_version WHERE id=1").Scan(&nextStr); err != nil {
@@ -91,13 +88,23 @@ func (m *IP2RegionUpdateManager) schedulerTick(now time.Time) {
 			return
 		}
 	}
+	if nextStr == "" {
+		// 首 tick 只写第一个排程槽（不触发运行）。
+		if _, err := db.DB.Exec("UPDATE security_ip2region_version SET next_update=? WHERE id=1", next); err != nil {
+			Logf("error", "ip2region update: failed to record next_update: %v", err)
+		}
+		return
+	}
+	// 失败退避机器已撤除（2026-09-25 用户裁定，与 CRS 侧同形）：重试在任务内
+	// 完成，next_update 恒为排程槽——失败落定后下一运行=下一排程槽。
+	// SEC-C-1（第 70 轮，镜像 SEC-C-U2）：先触发后写槽——StartUpdate 是唯一
+	// 原子在途门（在途或手动插队返回 ErrIP2RegionUpdateRunning，含旧 IsRunning
+	// 前置守卫与取锁间的微秒竞态窗口），成功后才推进 next_update；旧序
+	// 「先写槽后触发」被插队时空耗排程槽且不回填。
+	if _, err := m.StartUpdate("auto", nil); err != nil {
+		return
+	}
 	if _, err := db.DB.Exec("UPDATE security_ip2region_version SET next_update=? WHERE id=1", next); err != nil {
 		Logf("error", "ip2region update: failed to record next_update: %v", err)
 	}
-	if nextStr == "" {
-		return // first tick only schedules the first run
-	}
-	// 失败退避机器已撤除（2026-09-25 用户裁定，与 CRS 侧同形）：重试在任务内
-	// 完成，next_update 恒为排程槽；手动插队竞态静默忽略。
-	_, _ = m.StartUpdate("auto", nil)
 }

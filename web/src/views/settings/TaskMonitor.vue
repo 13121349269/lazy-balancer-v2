@@ -1,5 +1,16 @@
 <template>
   <div class="tm-root">
+    <!-- FE-70-9：轮询失败横幅（照 CertJobs 形态；行内件样式复用 main.css
+         .polling-error-*/.error-banner，FE-R2 家族收敛第 4 点） -->
+    <el-alert v-if="pollingError.errorMessage.value" type="error" :closable="false" show-icon class="polling-error-alert error-banner">
+      <template #title>
+        <div class="polling-error-title">
+          <span>任务监控加载失败：{{ pollingError.errorMessage.value }}</span>
+          <el-button link type="danger" :loading="refreshing" @click="retryPolling">立即重试</el-button>
+        </div>
+      </template>
+      <div class="polling-error-meta">{{ pollingErrorDescription }}</div>
+    </el-alert>
     <!-- KPI 概览（四卡） -->
     <el-row :gutter="20" class="tm-kpis">
       <el-col :xs="12" :md="6">
@@ -301,6 +312,8 @@ import { Refresh, PieChart as PieChartIcon, DataLine, List, Monitor, Lock, Box, 
 import { request } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
 import { usePollingTask } from '@/composables/usePollingTask'
+import { formatDate } from '@/utils/date'
+import { usePollingErrorState } from '@/composables/usePollingErrorState'
 import { statusColor } from '@/utils/chartTheme'
 import { certJobStatusLabel, type CertJobStatus } from '@/utils/certJobStatus'
 import DialogHeader from '@/components/DialogHeader.vue'
@@ -349,7 +362,10 @@ const fetchSeries = async () => {
 }
 const refreshNow = async () => {
   refreshing.value = true
-  try { await Promise.all([fetchTasks(), fetchSeries(), fetchCertQueue()]) } finally { refreshing.value = false }
+  try {
+    await Promise.all([fetchTasks(), fetchSeries(), fetchCertQueue()])
+    pollingError.clear()
+  } finally { refreshing.value = false }
 }
 onMounted(() => {
   void polling.run() // 首跑立即（start() 只设定时器；证书队列横幅已入轮询闭包随首跑）
@@ -357,13 +373,32 @@ onMounted(() => {
 })
 onUnmounted(() => polling.stop())
 
+// FE-70-9：轮询失败可见化（此前只落 console）。契约性失败（TypeError）退避
+// 期间轮询闭包经 canRun 门跳过；横幅「立即重试」重置退避立即拉取。
+const pollingError = usePollingErrorState()
+const pollingErrorDescription = computed(() => {
+  const lastError = formatDate(pollingError.lastErrorAt.value)
+  const retryAt = formatDate(pollingError.retryAt.value)
+  return retryAt
+    ? `最后错误：${lastError}；契约响应异常，自动重试已退避至 ${retryAt}`
+    : `最后错误：${lastError}`
+})
 const polling = usePollingTask(async () => {
   // U5-P3-4：证书队列横幅与任务列表同频 10s（曾只在 mounted/手动刷新拉取，横幅最长陈旧一个会话）
+  if (!pollingError.canRun()) return
   await Promise.all([fetchTasks(), fetchSeries(), fetchCertQueue()])
+  pollingError.clear()
 }, {
   interval: 10000,
-  onError: (e) => console.error('task monitor poll failed:', e),
+  onError: (e) => {
+    console.error('task monitor poll failed:', e)
+    pollingError.recordError(e)
+  },
 })
+const retryPolling = async (): Promise<void> => {
+  pollingError.resetBackoff()
+  await polling.run()
+}
 // ===== 证书队列状态（独立卡——非任务族） =====
 interface CertJobRow { id: number; domain: string; status: string; updated_at?: string | null; ca_provider_name?: string }
 // FE-D3（第 69 轮）：certQueue.loaded 死字段删除（写字段零消费方）。
@@ -378,8 +413,10 @@ const fetchCertQueue = async () => {
     const count = (pred: (j: CertJobRow) => boolean) => live.filter(pred).length
     certQueue.value = {
       total: live.length,
+      // FE-70-3：进行中扣除 waiting_ca——曾 live-queued 把「等 CA」双计进
+      // 「进行中」（同屏「进行中 2·等 CA 2」实为同一批任务）；waiting 仅入「等 CA」
       queued: count(j => ['queued', 'pending'].includes(j.status)),
-      running: live.length - count(j => ['queued', 'pending'].includes(j.status)),
+      running: live.length - count(j => ['queued', 'pending'].includes(j.status)) - count(j => j.status === 'waiting_ca'),
       waiting: count(j => j.status === 'waiting_ca'),
       jobs: live.slice(0, 6),
     }
@@ -508,7 +545,11 @@ const fetchCertJobHistory = async (jobId: number): Promise<RunRecord[]> => {
   const end = j.updated_at ? Date.parse(j.updated_at) : NaN
   return [{
     id: j.id, task_id: `cert-job:${j.id}`, family: 'cert-job', trigger: 'queue', status: j.status,
-    started_at: j.created_at || '', finished_at: j.updated_at || '',
+    // FE-70-2：cert_jobs 为 UTC 存储族（RFC3339Z）——映射时经 formatDate 转配置
+    // 时区墙串再入列（fmtTime 对墙串原样渲染）；同页引擎族 last_run 为配置时区
+    // 墙串不经此处。duration 用原始 RFC3339 串 Date.parse 差值，不受格式化影响。
+    started_at: j.created_at ? formatDate(j.created_at) : '',
+    finished_at: j.updated_at ? formatDate(j.updated_at) : '',
     duration_ms: !isNaN(start) && !isNaN(end) && end > start ? end - start : 0,
     message: j.message || undefined,
   }]

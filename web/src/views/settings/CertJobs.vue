@@ -161,7 +161,9 @@ let disposed = false
 
 const jobs = ref<CertJob[]>([])
 const loading = ref(false)
-const certRenewalDays = ref(30)
+// FE-70-8：cert_renewal_days 改读 authStore.fetchConfig 消费面（曾挂载整取
+// GET /config 单键）——store ref 响应式，挂载早于 fetchConfig 完成也能随后收敛。
+const certRenewalDays = computed(() => authStore.certRenewalDays)
 const currentPage = ref(1)
 const pageSize = ref(20)
 const total = ref(0)
@@ -194,6 +196,9 @@ const scrollToBottom = async () => {
 }
 
 const statusType = (status: CertJobStatus) => {
+  // FE-70-4（RV-1 同族收敛）：空 status 静默回退（存量行瞬时形态，对齐
+  // certJobStatusLabel 口径）；非空未知值保留 warn 暴露状态机漂移
+  if (!status) return 'info'
   switch (status) {
     case 'issued': return 'success'
     case 'failed': return 'danger'
@@ -231,6 +236,8 @@ const statusType = (status: CertJobStatus) => {
 }
 
 const retryCooldownMinutes = (status: CertJobStatus): number | null => {
+  // FE-70-4：空 status 静默回退 2 分钟兜底（同 statusType 口径）
+  if (!status) return 2
   switch (status) {
     case 'disabled': return null
     case 'issued':
@@ -454,20 +461,9 @@ const retryJobsPolling = async (): Promise<void> => {
   await jobsPolling.run()
 }
 
-onMounted(async () => {
-  try {
-    const configRes = await request.get('/config', { signal: jobsPolling.signal })
-    if (!disposed) {
-      // 与后端口径对齐：cert_renewal_days ≤ 0（含 0）时按 30 展示
-      const renewalDays = configRes.data?.cert_renewal_days ?? 30
-      certRenewalDays.value = renewalDays > 0 ? renewalDays : 30
-    }
-  } catch (error: unknown) {
-    if (!disposed) console.error('Failed to fetch certificate config:', error)
-  } finally {
-    void jobsPolling.run()
-    jobsPolling.start()
-  }
+onMounted(() => {
+  void jobsPolling.run()
+  jobsPolling.start()
 })
 
 onUnmounted(() => {

@@ -887,6 +887,17 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 		}
 		imported++
 	}
+	// CL-3（第 70 轮审计）：v1 导入此前是规则归一四面（导出/从端落库/v2 备份
+	// 导入/此处）中唯一事务内零归一的写路径——转换器对 BackendDomain/Gzip 无
+	// 协议门，TCP 行可携带 host_header/enable_compress/compress_types 死值落库。
+	// INSERT 后统一调与 v2 备份导入共享的 normalizeRuleRowsForTransport（单一
+	// 事实源）。
+	if err := normalizeRuleRowsForTransport(ctx, tx); err != nil {
+		err = session.abort(err)
+		recordAudit(c, "导入失败", "配置备份", err.Error())
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "导入规则归一失败，已回滚: " + err.Error()})
+		return
+	}
 	if err := session.commit(affectedRuleIDs, pendingCerts); err != nil {
 		status := http.StatusInternalServerError
 		message := "配置导入失败: " + err.Error()

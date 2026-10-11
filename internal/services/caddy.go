@@ -881,12 +881,23 @@ func (s *CaddyService) getUpstreamHealthFromMetrics() map[string]bool {
 	return result
 }
 
+// extractMetricLabel（LBS-A-2，第 70 轮 P4）：label 键必须以标签边界出现
+// （LB40-6 精确键匹配——与 handlers extractLabel 同型收敛）。裸子串匹配会把
+// peer_upstream 等前缀兄弟标签的值误归到目标 label。
 func extractMetricLabel(metricName string, label string) string {
-	idx := strings.Index(metricName, label+`="`)
-	if idx == -1 {
+	start := -1
+	for _, boundary := range []string{"," + label + `="`, "{" + label + `="`} {
+		if idx := strings.Index(metricName, boundary); idx >= 0 {
+			start = idx + len(boundary)
+			break
+		}
+	}
+	if start < 0 && strings.HasPrefix(metricName, label+`="`) {
+		start = len(label) + 2
+	}
+	if start < 0 {
 		return ""
 	}
-	start := idx + len(label) + 2
 	end := strings.Index(metricName[start:], `"`)
 	if end == -1 {
 		return ""
@@ -2608,7 +2619,9 @@ func GenerateRuleServerContext(caddyID string, listenPort int, protocol, domain 
 				hasCert = isACMECertIssuedFromStore(db.DB, caddyID, domain)
 			}
 		}
-		var policies []interface{}
+		// LBS-A-3（第 70 轮 P5）：初始化为空切片——nil 会让预览 JSON 输出
+		// tls_connection_policies: null（消费方按数组形状解构）。
+		policies := []interface{}{}
 		// Round 34 F-2: 与全量渲染 httpServersByPort 同口径——仅 enable_tls=1 且
 		// 存在启用上游的规则进入 TLS 策略（无上游/关 TLS 规则在真实配置中不存在）。
 		// N+12 G8-S3：证书仅有无的判断在 SQL 侧完成，不再把整列 PEM 拉进进程。

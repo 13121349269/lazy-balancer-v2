@@ -57,6 +57,9 @@ export const useAuthStore = defineStore('auth', () => {
   // 不再默认 'master'：从节点刷新+瞬时失败窗口曾按主节点 fail-open 渲染写控件。
   const nodeMode = ref<ClusterNodeMode | null>(null)
   const timezone = ref<string>('Asia/Shanghai')
+  // FE-70-8：cert_renewal_days 并入 /config 消费面（CertJobs 曾挂载整取单键）；
+  // ≤0（含 0）时按 30 展示，与后端口径对齐
+  const certRenewalDays = ref(30)
   const loading = ref(false)
   const intentionalLogout = ref(false)
   const currentPage = ref<PageId>(initialCurrentPage)
@@ -150,10 +153,12 @@ export const useAuthStore = defineStore('auth', () => {
   async function fetchConfig(silent = false) {
     if (!token.value) return
     try {
-      const res = await request.get<APIResponse<{ readonly is_master: boolean; readonly timezone?: string }>>('/config', { silent })
+      const res = await request.get<APIResponse<{ readonly is_master: boolean; readonly timezone?: string; readonly cert_renewal_days?: number }>>('/config', { silent })
       if (res.data) {
         nodeMode.value = res.data.is_master ? 'master' : 'slave'
         if (res.data.timezone) timezone.value = res.data.timezone
+        const renewalDays = res.data.cert_renewal_days ?? 30
+        certRenewalDays.value = renewalDays > 0 ? renewalDays : 30
       } else {
         scheduleConfigRetry()
       }
@@ -319,6 +324,7 @@ interface LoginResult {
     token,
     nodeMode,
     timezone,
+    certRenewalDays,
     loading,
     intentionalLogout,
     currentPage,

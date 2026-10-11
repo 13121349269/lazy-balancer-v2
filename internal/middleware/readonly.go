@@ -65,6 +65,10 @@ func isReadOnlyGuardWhitelisted(path string) bool {
 	// promote/forget-pins 补救通道不可达;verify-step 仅写非同步簿记列
 	// (users 触发器 OF 列表不含 mfa_last_timestep),从节点本地执行无
 	// 同步副作用,与 /auth/logout 同理放行。
+	// SYSMW-A2（第 70 轮）：login 公开路由、logout 挂 v1 级，当前均不经
+	// 本守卫（仅 admin/business 组级）——两条目为挪组防御（若日后路由
+	// 挪入组级，白名单仍须放行，对齐 middleware.go mfaStepUpGuard 同款
+	// 防御性豁免）。
 	return path == "/api/v1/auth/login" ||
 		path == "/api/v1/auth/logout" ||
 		path == "/api/v1/auth/mfa/verify-step" ||

@@ -651,6 +651,10 @@ func (e *Engine) runNow(id, trigger, operator string) (int64, error) {
 
 	if status == "failed" && runErr != nil {
 		e.finishRunWithMessage(runID, status, dur, truncMsg(runErr))
+	} else if status == "skipped" && runErr != nil {
+		// TASK-5（第 70 轮 P4）：skipped 终态同样落 message——跳过原因只进
+		// 任务日志 [done] 行时，任务历史页丢失「为何跳过」。
+		e.finishRunWithMessage(runID, status, dur, truncMsg(runErr))
 	} else {
 		e.finishRun(runID, status, dur)
 	}
@@ -1053,7 +1057,13 @@ type TaskHourlyStat struct {
 // 任务）。窗口=now-23h..now 逐小时升序 24 桶，空桶零填。
 func (e *Engine) Stats24hHourlySeries() []TaskHourlyStat {
 	loc := engineLocPtr()
-	curHour := time.Now().In(loc).Truncate(time.Hour)
+	// TASK-1（第 70 轮 P2）：墙面小时按日历分量取整。Truncate(time.Hour)
+	// 按 Unix 纪元绝对时长取整，+05:30 等非整小时偏移时区下产出 :30 桶键，
+	// 与 strftime('%H:00:00') 的墙面键永不相交（24 桶全零）。DST 形状：
+	// 桶键与 WHERE 界同用本锚点做绝对时长加减——fall-back 重复墙时合并到
+	// 后桶（计数不丢）、spring-forward 消失墙时无行可落。
+	now := time.Now().In(loc)
+	curHour := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), 0, 0, 0, loc)
 	out := make([]TaskHourlyStat, 24)
 	idx := map[string]int{}
 	for i := 0; i < 24; i++ {

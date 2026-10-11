@@ -2,6 +2,7 @@ package handlers
 
 // SEC40-B1-4:安全域文本字段长度封顶——策略名 ≤100 rune、描述 ≤500 rune、
 // 自定义规则名 ≤100 rune、自定义规则描述 ≤500 rune（SEC-U1 第 69 轮补齐）、
+// 拦截页名 ≤100 rune、拦截页描述 ≤500 rune（SEC-A-2 第 70 轮补齐）、
 // 拦截页 content ≤64KB;DB 列无长度约束,超长串随审计详情/列表响应/发射文本放大。
 
 import (
@@ -28,6 +29,7 @@ func newSecurityLengthRouter(t *testing.T) *gin.Engine {
 	router.PUT("/security/policies/:id", h.UpdateSecurityPolicy)
 	router.POST("/security/custom-rules", h.CreateSecurityCustomRule)
 	router.POST("/security/block-pages", h.CreateSecurityBlockPage)
+	router.PUT("/security/block-pages/:id", h.UpdateSecurityBlockPage)
 	return router
 }
 
@@ -101,6 +103,38 @@ func TestSecurityInputs_lengthLimits(t *testing.T) {
 		})
 		if rec.Code != http.StatusOK {
 			t.Fatalf("exactly 64KB content must pass, got %d %s", rec.Code, rec.Body.String())
+		}
+	})
+	// SEC-A-2（第 70 轮）：拦截页 name/description 补封顶（SEC40-B1-4 家族漏收敛
+	// 点——策略/自定义规则同口径 100/500 rune；创建与更新同门）。
+	t.Run("block page name over 100 runes rejected", func(t *testing.T) {
+		rec := postJSON(t, router, "/security/block-pages", map[string]any{
+			"name": strings.Repeat("页", 101), "content": "<html></html>",
+		})
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "100") {
+			t.Fatalf("101-rune block page name must 400, got %d %s", rec.Code, rec.Body.String())
+		}
+		rec = putJSON(t, router, "/security/block-pages/1", map[string]any{
+			"name": strings.Repeat("页", 101), "content": "<html></html>",
+		})
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "100") {
+			t.Fatalf("update 101-rune block page name must 400, got %d %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("block page description over 500 runes rejected", func(t *testing.T) {
+		rec := postJSON(t, router, "/security/block-pages", map[string]any{
+			"name": "p", "description": strings.Repeat("描", 501), "content": "<html></html>",
+		})
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "500") {
+			t.Fatalf("501-rune block page description must 400, got %d %s", rec.Code, rec.Body.String())
+		}
+		// 边界回归：恰好 500 rune 放行
+		rec = postJSON(t, router, "/security/block-pages", map[string]any{
+			"name": "p2", "description": strings.Repeat("描", 500), "content": "<html></html>",
+		})
+		if rec.Code != http.StatusOK {
+			t.Fatalf("500-rune block page description must pass, got %d %s", rec.Code, rec.Body.String())
 		}
 	})
 }

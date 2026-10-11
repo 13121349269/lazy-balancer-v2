@@ -582,6 +582,14 @@ func probeTXT(ctx context.Context, server, fqdn, expected string, recursion bool
 			lastErr = fmt.Errorf("dns %s: server %s", dns.RcodeToString[r.Rcode], server)
 			continue
 		}
+		// AD-3（第 70 轮审计）：TC=1 的「成功」应答其 Answer 段不可信（UDP
+		// 512B 载荷上限内常被截空；同域并存多条 TXT 时权威应答恒截断）——
+		// 按 miss 处理会致 authReady 永假、假阴性烧签发配额。continue 承接
+		// 到下一网络（TCP）重查。
+		if r.Truncated {
+			lastErr = fmt.Errorf("dns: truncated response from %s (%s)", server, network)
+			continue
+		}
 
 		for _, ans := range r.Answer {
 			if t, ok := ans.(*dns.TXT); ok {

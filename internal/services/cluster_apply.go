@@ -517,12 +517,14 @@ func replaceSnapshotTx(ctx context.Context, tx *sql.Tx, snapshot models.ClusterS
 	}
 	if snapshot.ACME != nil {
 		for _, provider := range snapshot.ACME.CAProviders {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO ca_providers (id,name,provider,directory_url,credentials,max_concurrent,min_interval_ms,enabled,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)`, provider.ID, provider.Name, provider.Provider, provider.DirectoryURL, nullableString(provider.Credentials), provider.MaxConcurrent, provider.MinIntervalMS, provider.Enabled, provider.CreatedAt, provider.UpdatedAt); err != nil {
+			// CL-1（第 70 轮审计）：从端全部时间列统一平面格式（nullableTimeFlat/
+			// UTC 直写），消除驱动序列化 '+00:00'/RFC3339 后缀形态与主端三态并存。
+			if _, err := tx.ExecContext(ctx, `INSERT INTO ca_providers (id,name,provider,directory_url,credentials,max_concurrent,min_interval_ms,enabled,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)`, provider.ID, provider.Name, provider.Provider, provider.DirectoryURL, nullableString(provider.Credentials), provider.MaxConcurrent, provider.MinIntervalMS, provider.Enabled, provider.CreatedAt.UTC().Format(crsTimeLayout), provider.UpdatedAt.UTC().Format(crsTimeLayout)); err != nil {
 				return fmt.Errorf("写入快照 CA 提供商 %d: %w", provider.ID, err)
 			}
 		}
 		for _, config := range snapshot.ACME.CertificateConfigs {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO certificate_configs (id,name,dns_provider,dns_credentials,enabled,created_at,updated_at) VALUES (?,?,?,?,?,?,?)`, config.ID, config.Name, config.DNSProvider, nullableString(config.DNSCredentials), config.Enabled, config.CreatedAt, nullableTime(config.UpdatedAt.NullTime)); err != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO certificate_configs (id,name,dns_provider,dns_credentials,enabled,created_at,updated_at) VALUES (?,?,?,?,?,?,?)`, config.ID, config.Name, config.DNSProvider, nullableString(config.DNSCredentials), config.Enabled, config.CreatedAt.UTC().Format(crsTimeLayout), nullableTimeFlat(config.UpdatedAt.NullTime)); err != nil {
 				return fmt.Errorf("写入快照证书配置 %d: %w", config.ID, err)
 			}
 		}
@@ -547,7 +549,7 @@ func replaceSnapshotTx(ctx context.Context, tx *sql.Tx, snapshot models.ClusterS
 			if cert.SourceStatus != "" {
 				message += "，源任务状态：" + cert.SourceStatus
 			}
-			if _, err := tx.ExecContext(ctx, `INSERT INTO cert_jobs (rule_id,domain,status,message,expires_at,cert_pem,key_pem,ca_provider_id,renewal_attempts,ca_available_after,last_error_code) SELECT ?,COALESCE(NULLIF(?,''),domain),'issued',?,?,?,?,?,?,?,? FROM lb_rules WHERE caddy_id=? AND tls_source='acme_dns'`, cert.RuleID, cert.Domain, message, nullableString(cert.ExpiresAt), cert.CertPEM, cert.KeyPEM, cert.CAProviderID, cert.RenewalAttempts, nullableTime(cert.CAAvailableAfter.NullTime), nullableString(cert.LastErrorCode), cert.RuleID); err != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO cert_jobs (rule_id,domain,status,message,expires_at,cert_pem,key_pem,ca_provider_id,renewal_attempts,ca_available_after,last_error_code) SELECT ?,COALESCE(NULLIF(?,''),domain),'issued',?,?,?,?,?,?,?,? FROM lb_rules WHERE caddy_id=? AND tls_source='acme_dns'`, cert.RuleID, cert.Domain, message, nullableString(cert.ExpiresAt), cert.CertPEM, cert.KeyPEM, cert.CAProviderID, cert.RenewalAttempts, nullableTimeFlat(cert.CAAvailableAfter.NullTime), nullableString(cert.LastErrorCode), cert.RuleID); err != nil {
 				return fmt.Errorf("写入快照证书 %s: %w", cert.RuleID, err)
 			}
 		}
@@ -610,7 +612,7 @@ func clearSyncTables(ctx context.Context, tx *sql.Tx, tables ...string) error {
 func insertSnapshotUsersAndKeys(ctx context.Context, tx *sql.Tx, snapshot models.ClusterSnapshot) error {
 	for _, user := range snapshot.Users {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO users (id,username,password_hash,role,display_name,is_enabled,password_version,password_changed_at,created_at,last_login,mfa_enabled,mfa_secret,mfa_recovery_codes,mfa_last_timestep,auth_provider,oidc_subject,oidc_issuer) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			user.ID, user.Username, user.PasswordHash, user.Role, user.DisplayName, user.IsEnabled, user.PasswordVersion, user.PasswordChangedAt, user.CreatedAt, nullableTime(user.LastLogin.NullTime),
+			user.ID, user.Username, user.PasswordHash, user.Role, user.DisplayName, user.IsEnabled, user.PasswordVersion, user.PasswordChangedAt, user.CreatedAt.UTC().Format(crsTimeLayout), nullableTimeFlat(user.LastLogin.NullTime),
 			user.MFAEnabled, user.MFASecret, user.MFARecoveryCodes, user.MFALastTimestep,
 			user.AuthProvider, user.OIDCSubject, user.OIDCIssuer); err != nil {
 			return fmt.Errorf("写入快照用户 %s: %w", user.Username, err)
@@ -629,7 +631,7 @@ func insertSnapshotUsersAndKeys(ctx context.Context, tx *sql.Tx, snapshot models
 				return fmt.Errorf("序列化快照密钥 %d 的 MCP IP 白名单: %w", key.ID, err)
 			}
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO api_keys (id,name,key_hash,key_prefix,created_by,expires_at,is_enabled,mcp_enabled,read_only,mcp_ip_whitelist,last_used,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, key.ID, key.Name, key.KeyHash, key.KeyPrefix, key.CreatedBy, nullableString(key.ExpiresAt), key.IsEnabled, key.MCPEnabled, key.ReadOnly, string(whitelistJSON), nullableTime(key.LastUsed.NullTime), key.CreatedAt); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO api_keys (id,name,key_hash,key_prefix,created_by,expires_at,is_enabled,mcp_enabled,read_only,mcp_ip_whitelist,last_used,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, key.ID, key.Name, key.KeyHash, key.KeyPrefix, key.CreatedBy, nullableString(key.ExpiresAt), key.IsEnabled, key.MCPEnabled, key.ReadOnly, string(whitelistJSON), nullableTimeFlat(key.LastUsed.NullTime), key.CreatedAt.UTC().Format(crsTimeLayout)); err != nil {
 			return fmt.Errorf("写入快照密钥 %d: %w", key.ID, err)
 		}
 	}
@@ -1261,17 +1263,10 @@ func snapshotNullableDatetime(value interface{}) any {
 	return nullableString(s)
 }
 
-func nullableTime(value sql.NullTime) any {
-	if !value.Valid {
-		return nil
-	}
-	return value.Time
-}
-
-// nullableTimeFlat（2026-10-11 时间戳格式统一）：从端落库时间统一 SQLite
-// 平面格式 'YYYY-MM-DD HH:MM:SS'（UTC）——此前直写 time.Time 由驱动序列化为
-// '+00:00' 后缀格式，与主端 datetime('now') 平面格式三态并存（时间戳同构
-// 迁移的写入侧终结点）。
+// nullableTimeFlat（2026-10-11 时间戳格式统一；CL-1 第 70 轮收口全部写点）：
+// 从端落库时间统一 SQLite 平面格式 'YYYY-MM-DD HH:MM:SS'（UTC）——此前直写
+// time.Time 由驱动序列化为带时区后缀格式，与主端 datetime('now') 平面格式
+// 三态并存（时间戳同构迁移的写入侧终结点）；空值路径保持 NULL 语义。
 func nullableTimeFlat(value sql.NullTime) any {
 	if !value.Valid {
 		return nil

@@ -1026,6 +1026,9 @@ func mfaStepUpGuard() gin.HandlerFunc {
 		// R72 C-I-1：step-up 机制本体必须永可达——豁免 verify-step 自身（POST，
 		// 位于本守卫之下），否则守卫生效后「弹码→verify-step→再 428」无限循环，
 		// 全员写操作死锁；/auth/logout 同理（登出不该要求验证码）。
+		// SYSMW-A1（第 70 轮）：当前 logout 挂 v1 级不经本守卫（守卫仅挂
+		// admin/business 组级），本条为防御性豁免——若日后 logout 挪入组级，
+		// 豁免仍须在场（对齐 readonly.go 白名单同款防御条目）。
 		if path == "/api/v1/auth/mfa/verify-step" || path == "/api/v1/auth/logout" {
 			c.Next()
 			return

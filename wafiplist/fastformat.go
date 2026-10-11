@@ -114,6 +114,12 @@ func ReadFastFile(path string) (*FastFileState, error) {
 		if i > 0 && state.V4[i-1].Addr().Compare(state.V4[i].Addr()) > 0 {
 			return nil, fmt.Errorf("fastfile: v4 entries not in ascending order at %d", i)
 		}
+		// PL-1（第 70 轮 P4）：嵌套/同址不同 bits（升序合法却互相包含）会被
+		// 窄段遮蔽产生二分假阴性——「可加载但查询错误」的最坏静默腐化形态，
+		// 响亮拒绝。
+		if i > 0 && state.V4[i-1].Contains(state.V4[i].Addr()) {
+			return nil, fmt.Errorf("fastfile: v4 entries not disjoint at %d (%s contains %s)", i, state.V4[i-1], state.V4[i])
+		}
 		offset += 5
 	}
 
@@ -128,6 +134,10 @@ func ReadFastFile(path string) (*FastFileState, error) {
 		state.V6[i] = netip.PrefixFrom(netip.AddrFrom16(addr), bits)
 		if i > 0 && state.V6[i-1].Addr().Compare(state.V6[i].Addr()) > 0 {
 			return nil, fmt.Errorf("fastfile: v6 entries not in ascending order at %d", i)
+		}
+		// PL-1：v6 同口径——互相包含即拒。
+		if i > 0 && state.V6[i-1].Contains(state.V6[i].Addr()) {
+			return nil, fmt.Errorf("fastfile: v6 entries not disjoint at %d (%s contains %s)", i, state.V6[i-1], state.V6[i])
 		}
 		offset += 17
 	}

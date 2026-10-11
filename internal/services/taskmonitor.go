@@ -134,7 +134,9 @@ func collectCertJobRows() []TaskInfo {
 			// 触发语义（2026-10-11 用户裁定）：cert-job 行视为触发任务——可自动
 			// 调度（签发守护消费）即可手动调度（证书可重签发）；重试门（在途 409/
 			// 退役 429/冷却 429）由 TriggerSystemTask 的 cert-job 分支复用承担。
-			Triggerable: true,
+			// TASK-3（第 70 轮 P4）：disabled 为恒终态退役行——重试门对其恒 429，
+			// Triggerable=false 让按钮呈现禁用态（点击必 429 是交互噪音）。
+			Triggerable: status != "disabled",
 			DetailHint:  "certificates",
 			LastRun: &TaskRunInfo{StartedAt: localDisplayUTC(updatedAt), FinishedAt: localDisplayUTC(updatedAt),
 				Trigger: "queue", Result: status, Message: message},

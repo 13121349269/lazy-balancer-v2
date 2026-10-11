@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/services"
+	"lazy-balancer-v2/internal/taskengine"
 )
 
 // countTriggerAudit 统计「触发/任务监控」审计行数。
@@ -101,4 +103,77 @@ func TestTriggerSystemTask_triggerFailureLeavesCompensationAudit(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("Trigger 失败路径零补偿审计——任务未执行/失败无痕（孤儿审计）")
+}
+
+// TASK-2（第 70 轮 P3）：手动触发 409 预检（IsTaskInFlight）与异步 goroutine
+// Trigger 之间无原子性——并发双击两请求均可过预检，后到者在引擎 CAS 落败拿
+// ErrAlreadyRunning：任务实际已由先到请求启动，落「触发失败」审计是语义
+// 失真（用户看到失败而任务在跑）。修复：该错误在 goroutine 内静默。
+//
+// 竞态窗口窄，测试用「同线程背靠背双发 + 重试直至成形」驱动：两请求均 200
+// 且胜者已进入 Run 才算成形（非空跑），成形后断言零「触发失败」审计。
+func TestTriggerSystemTask_doubleClickRaceNoMisleadingFailAudit(t *testing.T) {
+	initTaskEngineForTest(t)
+	newBackupTestHandlers(t)
+	r, _ := taskMonitorRouter()
+	te := services.TaskEngine()
+
+	waitNotInFlight := func() {
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			if !te.IsTaskInFlight("t-race") {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	materialized := false
+	for attempt := 0; attempt < 50 && !materialized; attempt++ {
+		before := countTriggerFailAudit(t)
+		entered := make(chan struct{})
+		release := make(chan struct{})
+		if err := te.Register(taskengine.Descriptor{
+			ID: "t-race", Family: "t", Name: "双击竞态", Kind: taskengine.KindOneshot,
+			Run: func(taskengine.RunContext) error {
+				close(entered)
+				<-release
+				return nil
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		rec1, rec2 := httptest.NewRecorder(), httptest.NewRecorder()
+		req1 := httptest.NewRequest(http.MethodPost, "/system/tasks/t-race/trigger", nil)
+		req2 := httptest.NewRequest(http.MethodPost, "/system/tasks/t-race/trigger", nil)
+		done := make(chan struct{}, 2)
+		go func() { r.ServeHTTP(rec1, req1); done <- struct{}{} }()
+		go func() { r.ServeHTTP(rec2, req2); done <- struct{}{} }()
+		<-done
+		<-done
+		if rec1.Code != http.StatusOK || rec2.Code != http.StatusOK {
+			// 预检已拦（其一 409）——竞态未成形，释放后重试
+			close(release)
+			waitNotInFlight()
+			continue
+		}
+		select {
+		case <-entered: // 两请求均 200 且胜者已进 Run——败者必拿 ErrAlreadyRunning
+			materialized = true
+		case <-time.After(2 * time.Second):
+			close(release)
+			waitNotInFlight()
+			continue
+		}
+		time.Sleep(200 * time.Millisecond) // 败者补偿路径（审计/日志）落库
+		if got := countTriggerFailAudit(t) - before; got != 0 {
+			close(release)
+			t.Fatalf("并发双击第二请求落了 %d 条「触发失败」审计——任务实际已启动（语义失真）", got)
+		}
+		close(release)
+		waitNotInFlight()
+	}
+	if !materialized {
+		t.Skip("50 次尝试内双击竞态未成形（预检均拦截）——未验证到目标分支")
+	}
 }

@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -65,7 +66,9 @@ func ReadRuleLogFrom(ruleID string, offset int64) (lines []string, next int64) {
 	if len(data) > 0 && data[len(data)-1] != '\n' {
 		// Hold back the unterminated trailing record so it is delivered
 		// complete on the next poll instead of being skipped forever.
-		if i := strings.LastIndex(string(data), "\n"); i >= 0 {
+		// LBS-A-1（第 70 轮 P4）：bytes.LastIndexByte 免去至多 8MB 窗口的
+		// string(data) 整体复制（尾行未终结时每 5s 轮询各命中一次）。
+		if i := bytes.LastIndexByte(data, '\n'); i >= 0 {
 			data = data[:i+1]
 		} else {
 			data = nil
@@ -103,12 +106,18 @@ func ReadRuleLogTail(ruleID string, maxLines int) (content string, offset int64)
 	}
 	size := info.Size()
 	const blockSize = int64(64 * 1024)
-	var buf []byte
-	end := size
+	// LBS-A-1（第 70 轮 P4）：两段式倒扫——此前 `buf = append(chunk, buf...)`
+	// 每块向前拼接是二次方拷贝（4MB 扫描上限内最坏 ≈130MB 瞬时分配，单次
+	// GetRuleLogs 可反复触发）。第一段只倒序记窗口起点+数换行（单块 scratch
+	// 复用），第二段对定窗单次 ReadAt 读回。行为逐字节不变：cap 判定、
+	// ReadAt 错误丢弃所在块（窗口止于已读前缀）、换行计数、cut 扫描与旧实现
+	// 逐分支等价，offset 返回值 size-len(buf)+cut 不变。
+	scratch := make([]byte, blockSize)
+	winStart := size
 	newlines := 0
 	scanned := int64(0)
 	capped := false
-	for end > 0 && newlines < maxLines+1 {
+	for end := size; end > 0 && newlines < maxLines+1; {
 		// maxBackwardScan 接线（U8-P3-1，F63-B5e2-2 补完）：无换行/损坏文件
 		// 不再一路扫到文件头，超限即停并返回部分 tail（一次性 warn 留痕）。
 		if scanned >= maxBackwardScan {
@@ -119,13 +128,13 @@ func ReadRuleLogTail(ruleID string, maxLines int) (content string, offset int64)
 		if start < 0 {
 			start = 0
 		}
-		chunk := make([]byte, end-start)
-		if _, err := f.ReadAt(chunk, start); err != nil {
+		n := int(end - start)
+		if _, err := f.ReadAt(scratch[:n], start); err != nil {
 			break
 		}
-		buf = append(chunk, buf...)
-		scanned += int64(len(chunk))
-		for _, b := range chunk {
+		winStart = start
+		scanned += int64(n)
+		for _, b := range scratch[:n] {
 			if b == '\n' {
 				newlines++
 			}
@@ -134,6 +143,12 @@ func ReadRuleLogTail(ruleID string, maxLines int) (content string, offset int64)
 	}
 	if capped {
 		Logf("warn", "rule log tail for %s hit %dMB backward scan cap, returning partial tail", ruleID, maxBackwardScan>>20)
+	}
+	buf := make([]byte, size-winStart)
+	if n, err := f.ReadAt(buf, winStart); err != nil && n < len(buf) {
+		// 理论不可达（窗口内各块第一段均已读成功）；保持旧实现「读取错误即
+		// 以已读前缀为窗口」的语义。
+		buf = buf[:n]
 	}
 	// keep only the last maxLines lines; when the log holds fewer lines than
 	// maxLines, cut stays 0 and everything is returned. An unterminated

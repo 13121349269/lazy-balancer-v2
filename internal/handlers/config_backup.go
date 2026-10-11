@@ -269,7 +269,7 @@ var backupTableNullDefaults = map[string]map[string]any{
 		"server_tokens_hidden": int64(0), "custom_routes_enabled": int64(0),
 		"proxy_dial_timeout": int64(0), "proxy_response_header_timeout": int64(0), "proxy_read_timeout": int64(0),
 		"proxy_write_timeout": int64(0), "proxy_stream_timeout": int64(0), "proxy_flush_interval": int64(0),
-		"proxy_stream_close_delay": int64(0), "host_header": "",
+		"proxy_stream_close_delay": int64(0), "host_header": "", "health_check_host": "",
 		"enable_tls": int64(0), "tls_source": "manual", "acme_config_id": int64(0), "ca_provider_id": int64(0),
 		"tls_cert": "", "tls_key": "", "tls_http_redirect": int64(0),
 		"enable_compress": int64(1), "compress_types": "gzip",
@@ -281,12 +281,16 @@ var backupTableNullDefaults = map[string]map[string]any{
 	"upstreams": {
 		"weight": int64(1), "dynamic_dns": int64(0), "enabled": int64(0),
 		"protocol": "http", "max_connections": int64(0),
+		// 逐上游回源域名（db.go upstreams DDL）：NOT NULL DEFAULT ''。
+		"origin_domain": "",
 	},
 	"users": {
 		"display_name": "", "is_enabled": int64(1), "password_version": int64(0),
 		"created_at":  "1970-01-01 00:00:00",
 		"mfa_enabled": int64(0), "mfa_secret": "", "mfa_recovery_codes": "[]",
 		"mfa_last_timestep": int64(0),
+		// 登录记账/来源标记（db.go users DDL）：NOT NULL DEFAULT 0 / 'local'。
+		"login_failed_attempts": int64(0), "auth_provider": "local",
 	},
 	"api_keys": {
 		"is_enabled": int64(1), "mcp_enabled": int64(0), "read_only": int64(0),
@@ -309,6 +313,11 @@ var backupTableNullDefaults = map[string]map[string]any{
 		// 上游 path 改写：NOT NULL 且默认空串的列——NULL 行归一空串（原样转发），
 		// 防手造备份 NULL 撞列约束响亮 500；缺键行由列 DEFAULT 兜底。
 		"upstream_path": "",
+		// 自定义路由静态响应/301 跳转（2026-10-10，db.go path_rules DDL）：
+		// 五列 NOT NULL，response_status DEFAULT 200，其余 DEFAULT ''——
+		// NULL 行按 schema DEFAULT 逐字归一（CORE-1，第 70 轮审计）。
+		"response_mode": "", "response_status": int64(200), "response_body": "",
+		"response_content_type": "", "redirect_to": "",
 	},
 	"security_policies": {
 		"description": "", "mode": "off", "anomaly_threshold": int64(5),
@@ -589,6 +598,40 @@ func restoreTable(ctx context.Context, tx *sql.Tx, database *sql.DB, table strin
 		query := "INSERT INTO " + table + " (" + strings.Join(columns, ",") + ") VALUES (" + strings.Join(placeholders, ",") + ")"
 		if _, err := tx.ExecContext(ctx, query, values...); err != nil {
 			return fmt.Errorf("写入表 %s: %w", table, err)
+		}
+	}
+	return nil
+}
+
+// normalizeRuleRowsForTransport（第 70 轮 CL-3/CL-4）：导入事务内的规则行
+// 存储归一共享实现——v1 导入与 v2 备份导入两条写路径的唯一归一点：
+// ① TCP 行 HTTP 专属七字段 + TLS 三字段死值清零（WHERE 谓词与
+// normalizeRuleForTransport / db.migrateTCPRuleDeadFields 同口径——
+// enable_tls=1 即入选，不要求证书材料非空）；
+// ② lb_rules/path_rules 的 created_at/updated_at 时间戳平面格式归一
+// （与启动迁移 normalizeRuleTimestampsMigration 同款 strftime/LIKE 门；
+// 导出 dump 为 SELECT * 原样行，旧备份可携带 RFC3339/Go time 格式）。
+// 启动迁移的 bump cluster_version 语义刻意不在此（迁移含快照缓存失效
+// 收敛语义；导入事务本身即变更源，维持单独形态）。
+func normalizeRuleRowsForTransport(ctx context.Context, tx *sql.Tx) error {
+	if _, err := tx.ExecContext(ctx, `UPDATE lb_rules SET
+		host_header='', health_check_path='', enable_compress=0, compress_types='',
+		request_body_max_size_mb=0, upstream_keepalive_timeout=0, server_tokens_hidden=0,
+		enable_tls=0, tls_cert='', tls_key=''
+		WHERE protocol='tcp' AND (
+			COALESCE(host_header,'')<>'' OR COALESCE(health_check_path,'')<>''
+			OR enable_compress=1 OR COALESCE(compress_types,'')<>''
+			OR request_body_max_size_mb<>0 OR upstream_keepalive_timeout<>0 OR server_tokens_hidden<>0
+			OR enable_tls=1
+		)`); err != nil {
+		return fmt.Errorf("规则 TCP 死值归一失败: %w", err)
+	}
+	for _, table := range []string{"lb_rules", "path_rules"} {
+		for _, col := range []string{"created_at", "updated_at"} {
+			if _, err := tx.ExecContext(ctx, `UPDATE `+table+` SET `+col+`=strftime('%Y-%m-%d %H:%M:%S', `+col+`)
+				WHERE `+col+` IS NOT NULL AND (`+col+` LIKE '%T%' OR `+col+` LIKE '%+%')`); err != nil {
+				return fmt.Errorf("规则时间戳归一失败 %s.%s: %w", table, col, err)
+			}
 		}
 	}
 	return nil
@@ -2562,31 +2605,18 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, dataOK bo
 			return
 		}
 	}
-	// 规则三面同构（2026-10-11 用户裁定）：导入的 lb_rules 行在事务内做同款
-	// TCP 死值归零 + 时间戳平面格式归一——与 normalizeRuleForTransport 传输
-	// 归一/启动迁移同一清单（导出 dump 为 SELECT * 原样行，旧备份可携带死值
-	// 与 RFC3339/Go time 格式时间戳；不归一则导入后主端 DB 重新回到三态并存）。
+	// 规则三面同构（2026-10-11 用户裁定；第 70 轮 CL-4 收敛）：导入的规则行
+	// 在事务内做 TCP 死值清零（七字段+TLS 三字段）+ lb_rules/path_rules 时间戳
+	// 平面格式归一——与 normalizeRuleForTransport 传输归一/启动迁移同一清单
+	// （不归一则导入后主端 DB 重新回到三态并存）。此前是平行手写 SQL 归一块
+	// （缺 TLS 三字段与 path_rules 时间戳），现改调与 v1 导入共享的
+	// normalizeRuleRowsForTransport（单一事实源）。
 	if _, hasRules := backup.Tables["lb_rules"]; hasRules {
-		if _, err := tx.ExecContext(ctx, `UPDATE lb_rules SET
-			host_header='', health_check_path='', enable_compress=0, compress_types='',
-			request_body_max_size_mb=0, upstream_keepalive_timeout=0, server_tokens_hidden=0
-			WHERE protocol='tcp' AND (
-				COALESCE(host_header,'')<>'' OR COALESCE(health_check_path,'')<>''
-				OR enable_compress=1 OR COALESCE(compress_types,'')<>''
-				OR request_body_max_size_mb<>0 OR upstream_keepalive_timeout<>0 OR server_tokens_hidden<>0)`); err != nil {
+		if err := normalizeRuleRowsForTransport(ctx, tx); err != nil {
 			err = session.abort(err)
-			recordAudit(c, action+"失败", "配置备份", "导入规则归一失败: "+err.Error())
+			recordAudit(c, action+"失败", "配置备份", err.Error())
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: action + "失败，已回滚"})
 			return
-		}
-		for _, col := range []string{"created_at", "updated_at"} {
-			if _, err := tx.ExecContext(ctx, `UPDATE lb_rules SET `+col+`=strftime('%Y-%m-%d %H:%M:%S', `+col+`)
-				WHERE `+col+` IS NOT NULL AND (`+col+` LIKE '%T%' OR `+col+` LIKE '%+%')`); err != nil {
-				err = session.abort(err)
-				recordAudit(c, action+"失败", "配置备份", "导入时间戳归一失败: "+err.Error())
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: action + "失败，已回滚"})
-				return
-			}
 		}
 	}
 

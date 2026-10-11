@@ -91,6 +91,13 @@ func (p *Provider) Present(ctx context.Context, zone, tokenFQDN, value string, t
 			return resolveErr
 		}
 		recordID, err = p.createRecord(ctx, freshID, subDomain, value, ttl)
+		if err == nil {
+			// AD-1（第 70 轮审计）：自愈重试成功后回写 domainID=freshID（与
+			// cleanUp deleteOne 的 U5-1 回写对称）——否则 ownership 回滚删除
+			// 与内存 owned 键仍打向陈旧 ID（删除必败/TXT 泄漏、CleanUp 键
+			// 不匹配静默零删除残留）。
+			domainID = freshID
+		}
 	}
 	if err != nil {
 		return err

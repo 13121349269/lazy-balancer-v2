@@ -1062,6 +1062,46 @@ func validateStageBlockPageRef(pageID, status int, label string) error {
 	return nil
 }
 
+// mixedUpstreamPoolError LBH-A-1（第 70 轮 P2）：HTTP 规则启用上游池混布
+// （保存门 handlers.go:615 同款文案/口径）——主池按启用上游统计（IIF 归一，
+// 空协议视同 http），路径池全量统计（PathRuleUpstream 无 enabled 位，与
+// 保存门 rule_features.go 路径池同口径）。启用链（EnableRule 经
+// validateStoredRuleConfig）、启动/UpdateConfig 聚合校验、复制链
+// （DuplicateRule）共用本 helper（R-12：不落第三份实现）。
+func mixedUpstreamPoolError(rule models.LbRule) error {
+	if rule.Protocol != "http" {
+		return nil
+	}
+	protos := map[string]bool{}
+	for _, u := range rule.Upstreams {
+		if !u.Enabled {
+			continue
+		}
+		proto := u.Protocol
+		if proto == "" {
+			proto = "http"
+		}
+		protos[proto] = true
+	}
+	if protos["http"] && protos["https"] {
+		return fmt.Errorf("同一 HTTP 规则的启用上游协议须一致（http/https 混布时 http 上游会被 TLS 化静默全灭；如需共存请拆分为两条规则）")
+	}
+	for _, pr := range rule.PathRules {
+		pathProtos := map[string]bool{}
+		for _, u := range pr.Upstreams {
+			proto := u.Protocol
+			if proto == "" {
+				proto = "http"
+			}
+			pathProtos[proto] = true
+		}
+		if pathProtos["http"] && pathProtos["https"] {
+			return fmt.Errorf("路径规则 %s 的自定义上游 http/https 混布（同一上游池协议须一致）", pr.Path)
+		}
+	}
+	return nil
+}
+
 func validateStoredRuleConfig(ctx context.Context, caddyID string) error {
 	rules, err := loadRulesForConfigValidation(ctx, " WHERE caddy_id = ?", caddyID)
 	if err != nil {
@@ -1100,6 +1140,12 @@ func validateStoredRuleConfig(ctx context.Context, caddyID string) error {
 	// 渲染侧整体跳过(无 Host 头驱动解析),启用即拒,不留静默死规则。
 	if rule.Protocol == "tcp" && rule.DynamicDNS {
 		return &configValidationError{message: "TCP 规则不支持动态上游（dynamic_dns），请关闭动态 DNS 或改用 HTTP 协议"}
+	}
+	// LBH-A-1（第 70 轮 P2）：启用上游池混布与保存门同检——存量（69 轮修复
+	// 前落库/直改 DB）混布行经启用投入运行会让 http 上游被池级 TLS 化静默
+	// 全灭 502（渲染器对混布池无错误路径，静默渲染）。
+	if err := mixedUpstreamPoolError(rule); err != nil {
+		return &configValidationError{message: err.Error()}
 	}
 	return validateRuleConfigGeneration(rule)
 }
@@ -1193,6 +1239,18 @@ func validateEnabledStoredRuleConfigs(ctx context.Context) error {
 	for port, mix := range portTLSMix {
 		if len(mix[0]) > 0 && len(mix[1]) > 0 {
 			services.Logf("warn", "端口 %d 存在 TLS 与明文规则混布（明文：%v；TLS：%v）——该端口监听器将整体切换为 TLS，明文规则流量将握手失败，请调整规则端口", port, mix[0], mix[1])
+		}
+	}
+	// LBH-A-1（第 70 轮 P2）：存量启用行启用上游池混布点名告警（镜像
+	// portTLSMix 形态，不阻断启动——阻断会让节点起不来；启用方向已被
+	// validateStoredRuleConfig 400 拦截，此门兜直改 DB/69 轮修复前落库的
+	// 存量，提示管理员修正）。
+	for _, rule := range rules {
+		if !rule.Enabled || rule.Protocol != "http" {
+			continue
+		}
+		if err := mixedUpstreamPoolError(rule); err != nil {
+			services.Logf("warn", "规则 %s（%s）%s——混布池已进入运行态，http 上游正被池级 TLS 化静默 502，请统一上游协议或拆分规则", rule.Name, rule.CaddyID, err.Error())
 		}
 	}
 	return errors.Join(problems...)

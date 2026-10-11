@@ -87,6 +87,12 @@ func (h *Handlers) TriggerSystemTask(c *gin.Context) {
 				// F-U1-1（第 68 轮）：Trigger 失败补偿——否则非自记族只剩
 				// 「触发」孤儿行（任务未执行）、自记族零痕迹；日志同步留痕。
 				if err := te.Trigger(id, "manual", op); err != nil { // 异步——耗时由 task_runs 记录；operator 审计归人
+					// TASK-2（第 70 轮 P3）：预检（IsTaskInFlight）与本次 Trigger
+					// 之间无原子性——并发双击后到者 CAS 落败拿 ErrAlreadyRunning，
+					// 任务实际已由先到请求启动，落「触发失败」审计是语义失真。
+					if errors.Is(err, taskengine.ErrAlreadyRunning) {
+						return
+					}
 					services.Logf("error", "手动触发任务 %s 失败: %v", id, err)
 					services.RecordAuditLog(op, "触发失败", "任务监控", fmt.Sprintf("手动触发任务 %s 失败: %v", m.Name, err), "")
 				}

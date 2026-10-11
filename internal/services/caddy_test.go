@@ -2231,3 +2231,28 @@ func TestCaddyOpLockSharedBetweenForceAndHandlers(t *testing.T) {
 		t.Fatal("释放后 handler 侧应获得锁")
 	}
 }
+
+// LBS-A-2（第 70 轮 P4）：extractMetricLabel 边界感知收敛（与 handlers
+// extractLabel 同型，LB40-6 精确键匹配）——裸子串匹配会把 peer_upstream 等
+// 前缀兄弟标签的值误归到 upstream（现实标签集暂无前缀兄弟，防御性收敛）。
+func TestExtractMetricLabel_boundaryAware(t *testing.T) {
+	sibling := `caddy_reverse_proxy_upstreams_healthy{peer_upstream="10.0.0.1:80",upstream="10.0.0.2:80"} 1`
+	if got := extractMetricLabel(sibling, "upstream"); got != "10.0.0.2:80" {
+		t.Fatalf("upstream=%q, want 10.0.0.2:80（peer_upstream 不得误命中）", got)
+	}
+	if got := extractMetricLabel(sibling, "peer_upstream"); got != "10.0.0.1:80" {
+		t.Fatalf("peer_upstream=%q, want 10.0.0.1:80", got)
+	}
+	first := `caddy_layer4_proxy_upstream_healthy{upstream="10.0.0.3:80"} 0`
+	if got := extractMetricLabel(first, "upstream"); got != "10.0.0.3:80" {
+		t.Fatalf("首标签边界（{upstream=\"）失效: %q", got)
+	}
+	absent := `caddy_reverse_proxy_upstreams_healthy{other="x"} 1`
+	if got := extractMetricLabel(absent, "upstream"); got != "" {
+		t.Fatalf("无目标标签应返回空串: %q", got)
+	}
+	unterminated := `caddy_reverse_proxy_upstreams_healthy{upstream="10.0.0.4`
+	if got := extractMetricLabel(unterminated, "upstream"); got != "" {
+		t.Fatalf("值未闭合应返回空串: %q", got)
+	}
+}

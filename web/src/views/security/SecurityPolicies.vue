@@ -3072,11 +3072,6 @@ onMounted(async () => {
    （右对齐 + 16px 上距，2026-09-25 用户裁定——模板挂类漏定义致的左对齐修复） */
 .rules-pagination { display: flex; justify-content: flex-end; margin-top: 16px; }
 
-
-/* 自管标签行(EP 2.14.4 规避,同 ClusterModeCard 范式):复刻 EP
- * .el-form-item__label 计算样式(右对齐/32px 行高/12px 右内边距),
- * 宽度对齐本向导 label-width=100px */
-
 .mode-radio-group :deep(.el-radio__label) { white-space: nowrap; }
 .mode-radio-group { flex-wrap: wrap; row-gap: 4px; }
 .waf-off-hint {

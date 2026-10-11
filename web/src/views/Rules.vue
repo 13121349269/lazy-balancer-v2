@@ -1106,7 +1106,7 @@ import DialogHeader from '@/components/DialogHeader.vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import axios from 'axios'
 import { ansiToHtml } from '@/utils/ansi'
-import { formatDate } from '@/utils/date'
+import { formatDate, parseDbTimeMs } from '@/utils/date'
 import LogStorageBar from '@/components/LogStorageBar.vue'
 import RuleFlowDialog from '@/components/RuleFlowDialog.vue'
 import SecurityBindingEditor from '@/components/SecurityBindingEditor.vue'
@@ -1412,11 +1412,9 @@ const filteredRules = computed(() => {
 })
 
 
-const ruleUpdatedAtMs = (rule: Rule): number => {
-  const value = rule.updated_at
-  const t = value ? new Date(value).getTime() : 0
-  return Number.isNaN(t) ? 0 : t
-}
+// FE-70-5：墙钟串统一经 parseDbTimeMs 的 +Z 规范化——裸 new Date 在 Safari 对
+// 空格分隔格式返回 NaN，曾致排序比较恒 0 退化。
+const ruleUpdatedAtMs = (rule: Rule): number => parseDbTimeMs(rule.updated_at) ?? 0
 
 // 分页夹紧+切片：useClampedPagination 单一范式（第 52 轮 P5-3）
 const { pagedItems: pagedRules } = useClampedPagination(filteredRules, currentPage, pageSize)

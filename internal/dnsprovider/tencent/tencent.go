@@ -226,7 +226,10 @@ func (p *Provider) createRecord(ctx context.Context, zone, subDomain, value stri
 	resp, err := p.client.CreateRecordWithContext(ctx, req)
 	if err != nil {
 		if ctx.Err() != nil {
-			return 0, ctx.Err()
+			// AD-5（第 70 轮）：对齐 deleteOne 口径（第 56 轮 P5）——以
+			// ctx.Err() 整体覆写会丢失具体 API 失败原因（诊断信息归零），
+			// errors.Join 保留两者。
+			err = errors.Join(err, ctx.Err())
 		}
 		return 0, fmt.Errorf("CreateRecord failed: %w", err)
 	}

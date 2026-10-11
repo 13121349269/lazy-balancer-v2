@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"strings"
 	"sync"
@@ -599,6 +600,50 @@ func TestCertificateService_renewExpiringCertificates_retries_failed_first_issua
 	}
 	close(release)
 	<-done
+}
+
+// CERT-A（第 70 轮）：已达最大重试的 issued/failed 任务每轮续签扫描都会被
+// 重复选出并入摘要后静默 continue——至少要留 warn 痕，操作者可见「仅手动
+// 重试可达」（waiting_ca 有终局转换+审计，同条件 issued/failed 零痕迹）。
+func TestCertificateService_renewExpiringCertificates_logs_capped_skip(t *testing.T) {
+	// Given：临期 issued 任务已达最大续签重试次数
+	_, database := newClusterTestService(t)
+	ResetCAQueueManagerForTest()
+	InitCAQueueManager(func() error { return nil })
+	t.Cleanup(ResetCAQueueManagerForTest)
+	ruleID := "lb_capped_warn"
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled,enable_tls,tls_source) VALUES (?,?,?,'http',8080,1,1,'acme_dns')`, ruleID, ruleID, ruleID+".example.com"); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	maxAttempts := GetCertRenewalAttempts()
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,expires_at,renewal_attempts,ca_provider_id) VALUES (?,?, 'issued', datetime('now','+1 day'),?,1)`, ruleID, ruleID+".example.com", maxAttempts); err != nil {
+		t.Fatalf("seed capped job: %v", err)
+	}
+	var buf strings.Builder
+	oldWriter := log.Writer()
+	oldFlags := log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(oldWriter)
+		log.SetFlags(oldFlags)
+	})
+
+	// When
+	resetCertificateServiceForTest(t)
+	NewCertificateService().renewExpiringCertificates()
+
+	// Then：静默跳过必须留 warn 痕（含任务号与上限值）
+	if !strings.Contains(buf.String(), "已达最大重试次数") {
+		t.Fatalf("capped job skipped without warn trace, log=%q", buf.String())
+	}
+	var attempts int
+	if err := database.QueryRow("SELECT renewal_attempts FROM cert_jobs WHERE rule_id=?", ruleID).Scan(&attempts); err != nil {
+		t.Fatalf("read capped job: %v", err)
+	}
+	if attempts != maxAttempts {
+		t.Fatalf("capped job attempts=%d, want unchanged %d", attempts, maxAttempts)
+	}
 }
 
 func TestCertificateService_requeueWaitingCAJobs_disables_orphaned_waiting_job(t *testing.T) {

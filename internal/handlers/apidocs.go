@@ -66,9 +66,9 @@ var apiDocRoutes = []apiDocRoute{
 	{"GET", "/system/tasks/:id/history", "系统", "任务运行历史（task_runs 时间倒序，最多 50 条）", "", `{"runs":[{"id":1,"task_id":"threat","family":"security","trigger":"manual","operator":"alice","status":"success","started_at":"2026-09-29 00:30:00","finished_at":"2026-09-29 00:30:01","duration_ms":1043,"message":""}]}`, []string{"401 unauthenticated"}, "每次真实执行落一行（含手动/自动）；无历史的任务族返回空数组。status ∈ running/success/failed/cancelled/skipped/interrupted。"},
 	{"GET", "/system/tasks", "系统", "任务监控聚合视图（全部定时/后台任务族）", "", `{"tasks":[{"id":"threat","name":"威胁情报库更新","category":"安全防护","kind":"scheduled","status":"idle","enabled":true,"cancellable":false,"controllable":false,"triggerable":true,"toggleable":true,"loop_on":true,"last_run":{"started_at":"2026-09-28 20:00:00","finished_at":"2026-09-28 20:00:01","duration_ms":1043,"trigger":"auto","operator":"","result":"success"},"next_run_at":"2026-09-29 20:00:00","runs_24h":3,"success_24h":3,"fail_24h":0}]}`, []string{"401 unauthenticated"}, "全员可见（从节点只读）；status=running 且 cancellable=true 的任务可经 /system/tasks/:id/cancel 取消（仅下载类）。"},
 	{"GET", "/system/tasks/stats-24h-series", "系统", "近 24 小时任务执行分小时桶序列（时间序列图数据源）", "", `{"series":[{"hour":"2026-10-11 03:00:00","success":12,"failed":1}]}`, []string{"401 unauthenticated"}, "全员可见（从节点只读）；恒 24 桶升序（now-23h..now 配置时区墙面小时），空桶零填。"},
-	{"POST", "/system/tasks/:id/trigger", "系统", "手动触发任务（12 个定时性质族——见 GET /system/tasks triggerable）", "", `{"code":0,"data":{"status":"running","trigger":"manual"}}`, []string{"400 not_triggerable", "401 unauthenticated", "403 admin_or_master_required", "409 running"}, "仅管理员+主节点；统一经任务引擎（单飞/主节点门/历史单写）。手动触发操作者记入任务运行历史 operator 列。"},
-	{"POST", "/system/tasks/:id/toggle", "系统", "暂停/恢复任务自动调度", `{"enabled":false}`, `{"code":0,"message":"已暂停威胁情报库自动更新"}`, []string{"400 not_toggleable", "401 unauthenticated", "403 admin_or_master_required"}, "统一调度开关（v2.0 四类型标准）：定时=暂停/恢复排程、循环=暂停/恢复循环、常驻=启停自管理循环；触发类不可调度（400）。"},
-	{"POST", "/system/tasks/:id/control", "系统", "常驻循环任务启停（start/stop/restart）", `{"action":"restart"}`, `{"code":0,"message":"已重启任务 config-watchdog"}`, []string{"400 not_controllable", "401 unauthenticated", "403 admin_required"}, "仅常驻（daemon）任务可控：security-events-ingestion、cert-issuance、cluster-sync；其余类型恒 400 not_controllable。停止类操作前端有二次确认。"},
+	{"POST", "/system/tasks/:id/trigger", "系统", "手动触发任务（全部非常驻任务族——类型派生，见 GET /system/tasks triggerable；证书队列行用 cert-job:<job_id>）", "", `{"code":0,"data":{"status":"running","trigger":"manual"}}`, []string{"400 not_triggerable", "401 unauthenticated", "403 admin_or_master_required", "409 running", "428 mfa_step_up_required"}, "仅管理员+主节点；统一经任务引擎（单飞/主节点门/历史单写）。手动触发操作者记入任务运行历史 operator 列。"},
+	{"POST", "/system/tasks/:id/toggle", "系统", "暂停/恢复任务自动调度", `{"enabled":false}`, `{"code":0,"message":"已暂停威胁情报库自动更新"}`, []string{"400 not_toggleable", "401 unauthenticated", "403 admin_or_master_required", "428 mfa_step_up_required"}, "统一调度开关（v2.0 四类型标准）：定时=暂停/恢复排程、循环=暂停/恢复循环、常驻=启停自管理循环；触发类不可调度（400）。"},
+	{"POST", "/system/tasks/:id/control", "系统", "常驻循环任务启停（start/stop/restart）", `{"action":"restart"}`, `{"code":0,"message":"已重启任务 config-watchdog"}`, []string{"400 not_controllable", "401 unauthenticated", "403 admin_required", "428 mfa_step_up_required"}, "仅常驻（daemon）任务可控：security-events-ingestion、cert-issuance、cluster-sync；其余类型恒 400 not_controllable。停止类操作前端有二次确认。"},
 	{"POST", "/system/tasks/:id/cancel", "系统", "取消运行中任务（仅下载类）", "", `{"code":0,"message":"已发出取消信号，任务将在当前下载阶段中断"}`, []string{"401 unauthenticated", "403 admin_or_master_required", "409 not_running", "428 mfa_step_up_required"}, "下载阶段中断，已完成源的结果保留；非下载类任务（备份/重载）不支持取消。"},
 	{"POST", "/auto-backup/run", "配置", "手动触发一次完整备份", "", `{"code":0,"message":"手动备份完成","data":{"id":2,"filename":"lbbak-manual-20260920-040000.lbbak","status":"success","trigger_type":"manual"}}`, []string{"403 slave_or_admin_required", "428 mfa_step_up_required", "500 run_failed"}, "仅主节点；与导出同构（lbbak，含凭证与证书材料），落盘服务器 backup 目录；已有任务执行中返回 500（不排队）。"},
 	{"DELETE", "/auto-backup/:id", "配置", "删除备份记录与文件", "", `{"code":0,"message":"备份已删除"}`, []string{"400 invalid_id", "403 slave_or_admin_required", "404 not_found", "428 mfa_step_up_required"}, "行不存在 404；文件缺失容忍（仅删行）。"},
@@ -384,7 +384,10 @@ func writeOpenAPIParameters(b *strings.Builder, route apiDocRoute, queryParamete
 	for part := range strings.SplitSeq(route.Path, "/") {
 		if name, found := strings.CutPrefix(part, ":"); found {
 			valueType := "string"
-			if name == "id" {
+			// APIMCP-A2（第 70 轮）：任务 ID 是 "threat"/"cert-job:5" 等字符串
+			// ——/system/tasks/ 前缀路由的 :id 保留 string，与其余数字 :id 路由
+			// 的 integer 判定分流（MCP 侧同参数始终 string，两侧此前自相矛盾）。
+			if name == "id" && !strings.HasPrefix(route.Path, "/system/tasks/") {
 				valueType = "integer"
 			}
 			parameters = append(parameters, apiDocParameter{name, valueType, "路由路径参数"})

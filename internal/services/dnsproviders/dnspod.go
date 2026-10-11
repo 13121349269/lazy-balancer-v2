@@ -69,6 +69,9 @@ func (d *DNSPod) buildCredentials(creds map[string]string) (map[string]string, e
 		if creds["app_id"] == "" || creds["app_token"] == "" {
 			return nil, fmt.Errorf("DNSPod 认证方式需要提供 App ID 和 App Token")
 		}
+		// AD-2（第 70 轮）：app_id+app_token→api_token 拼接为双实现——本处
+		// （UI 面 canonical 产出）与 internal/dnsprovider/factory.go 的 legacy
+		// 归一化（协议面消费）互为镜像；任一侧改字段名/拼接格式须双侧同步。
 		return map[string]string{
 			"mode":      "dnspod",
 			"api_token": creds["app_id"] + "," + creds["app_token"],

@@ -102,7 +102,8 @@ func (h *Handlers) UpdateThreatAutoUpdate(c *gin.Context) {
 }
 
 // UpdateThreatSchedule 任务级排程保存（弹框「定时更新」区；镜像
-// UpdateCRSSchedule 形态——保存即重排启用且非失败源的 next_update）。
+// UpdateCRSSchedule 形态——保存即重排 next_update：WHERE update_enabled=1
+// 一律重排（2026-09-25 裁定，含失败源））。
 func (h *Handlers) UpdateThreatSchedule(c *gin.Context) {
 	days, hhmm, ok := h.updateLibSchedule(c, services.SetThreatSchedule)
 	if !ok {

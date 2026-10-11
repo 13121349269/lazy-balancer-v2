@@ -79,7 +79,9 @@ func loginLockoutEnabled() bool {
 
 // recordLoginFailure 登录阶段失败（密码或 MFA 验证码）的单条条件 UPDATE 原子
 // 递增——开关开启且 ≥5 同语句置锁并清零（避免锁满后再计延长冷却）；开关关闭
-// 仅累加计数不置锁（与 mfaRecordFailure 的开关语义同型）。
+// 仅累加计数不置锁（与 mfaRecordFailure 的开关语义同型）。SYS-2（第 70 轮
+// 裁定·有意设计）：关闭期累计的计数不清零，重新开启后立即参与判定——失败
+// 计数是事实，关闭期清零反而给免费重置窗口。
 func recordLoginFailure(userID int) {
 	now := time.Now()
 	if !loginLockoutEnabled() {
@@ -213,6 +215,18 @@ func (h *Handlers) respondLogin(c *gin.Context, user models.User, passwordVersio
 	h.respondLoginWithMFA(c, user, passwordVersion, 0, true)
 }
 
+// loginExpireMinutes 读取 global_config.jwt_expire_minutes 并钳制到合法区间
+// （≤0 或 >1440 或查询失败一律回退 20）。SYS-3（第 70 轮）：本函数与
+// auth_oidc.go issueOIDCJWT 原先逐字同形双实现——抽单源后密码登录与 OIDC
+// 签发的令牌有效期口径恒一致（行为零变化）。
+func loginExpireMinutes() int {
+	expireMinutes := 20
+	if err := db.DB.QueryRow("SELECT COALESCE(jwt_expire_minutes,20) FROM global_config WHERE id=1").Scan(&expireMinutes); err != nil || expireMinutes <= 0 || expireMinutes > 1440 {
+		return 20
+	}
+	return expireMinutes
+}
+
 // respondLoginWithMFA 携带 mfa_ts 声明签发（0=未验证/不写入——非 MFA 用户登录、
 // MFA 首次签发在 verify 成功时传 now；票据登录暂传 0）。isLogin=false 时跳过
 // 登录审计与 last_login 更新（verify-step 的 step-up 场景，R72 D-新6）。
@@ -233,10 +247,8 @@ func (h *Handlers) respondLoginWithMFA(c *gin.Context, user models.User, passwor
 		nodeMode = "slave"
 	}
 
-	expireMinutes := 20
-	if err := db.DB.QueryRow("SELECT COALESCE(jwt_expire_minutes,20) FROM global_config WHERE id=1").Scan(&expireMinutes); err != nil || expireMinutes <= 0 || expireMinutes > 1440 {
-		expireMinutes = 20
-	}
+	// SYS-3：钳制逻辑抽单源 loginExpireMinutes（与 OIDC 签发共用）。
+	expireMinutes := loginExpireMinutes()
 	expireDuration := time.Duration(expireMinutes) * time.Minute
 	now := time.Now()
 	jtiBytes := make([]byte, 32)
@@ -404,7 +416,9 @@ func validatePasswordPolicy(password string) error {
 
 // validateUsernamePolicy 用户名策略（2026-09-28 用户裁定）：仅允许小写英文
 // 开头，字符只允许小写字母或小写字母+数字——不允许大写、汉字、特殊字符、
-// 下划线、连字符。长度 3-50 由 binding 层覆盖。
+// 下划线、连字符。长度 3-50 由 binding 层覆盖。SYS-1（第 70 轮裁定·双向
+// 声明）：本策略仅约束本地创建/改名；OIDC JIT 开户有意豁免（IdP 源属性，
+// 强行归一会破坏身份链——见 auth_oidc.go 开户分支同名声明）。
 var usernamePolicyRe = regexp.MustCompile(`^[a-z][a-z0-9]*$`)
 
 func validateUsernamePolicy(username string) error {

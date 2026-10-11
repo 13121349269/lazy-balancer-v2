@@ -131,7 +131,7 @@ var tools = []toolSpec{
 	{"list_system_tasks", "任务监控聚合视图（全部定时/后台任务族状态）", http.MethodGet, "/system/tasks", nil, nil, emptySchema},
 	{"get_system_task_logs", "任务文本日志（尾部 256KB）", http.MethodGet, "/system/tasks/{id}/logs", []string{"id"}, nil, idSchema("id", "任务 ID", "string")},
 	{"get_system_task_history", "任务运行历史（task_runs 时间倒序）", http.MethodGet, "/system/tasks/{id}/history", []string{"id"}, nil, idSchema("id", "任务 ID", "string")},
-	{"trigger_system_task", "手动触发任务（定时/循环/触发类——12 个可触发族）", http.MethodPost, "/system/tasks/{id}/trigger", []string{"id"}, nil, idSchema("id", "任务 ID（见 GET /system/tasks 的 can_trigger 族）", "string")},
+	{"trigger_system_task", "手动触发任务（全部非常驻任务族——以 GET /system/tasks 的 triggerable 字段为准；证书队列行用 cert-job:<job_id>）", http.MethodPost, "/system/tasks/{id}/trigger", []string{"id"}, nil, idSchema("id", "任务 ID（见 GET /system/tasks 的 can_trigger 族）", "string")},
 	{"toggle_system_task", "统一调度开关（定时=排程暂停/循环=循环暂停/常驻=启停；触发类不可调度）", http.MethodPost, "/system/tasks/{id}/toggle", []string{"id"}, nil, toggleTaskSchema},
 	{"cancel_system_task", "取消运行中任务（仅下载类）", http.MethodPost, "/system/tasks/{id}/cancel", []string{"id"}, nil, idSchema("id", "任务 ID", "string")},
 	{"control_system_task", "重启常驻任务（action=restart——启停已由调度开关承担）", http.MethodPost, "/system/tasks/{id}/control", []string{"id"}, nil, controlTaskSchema},
@@ -220,7 +220,7 @@ const serverInstructions = `Lazy Balancer V2 负载均衡管理接口。认证�
 权限范围：
 - 只读 Key（read_only）可调用 GET 查询类工具（export_config 除外——导出含用户/密钥哈希，与写操作同级隐藏）及 5 个读探测 POST 工具（test_ca_provider/test_certificate_config/parse_certificate/validate_import/preview_config）；其余写工具（POST/PUT/DELETE）需非只读 Key
 - 写操作需要管理员权限（API Key 所属用户角色为 admin），非管理员 Key 调用写工具返回 403
-- 从节点上仅集群端点（promote_cluster/pull_sync/set_cluster_mode/forget_cluster_pins）可用且仅从节点语义正确，其余变更类写工具一律 403（预览/解析/测试类 POST 除外）——集群运维在目标节点本身调用，不要发往主节点；所有写操作校验后即时生效（失败自动回滚），无需手动 reload
+- 从节点上仅 /cluster/ 前缀端点可过只读门，非从节点语义的集群操作由业务层拒绝（403/400），其余变更类写工具一律 403（预览/解析/测试类 POST 除外）——集群运维在目标节点本身调用，不要发往主节点；所有写操作校验后即时生效（失败自动回滚），无需手动 reload
 - 配置 IP 白名单的 Key 还需来源 IP 命中白名单（MCP 内部转发不受白名单影响）
 
 常用流程：

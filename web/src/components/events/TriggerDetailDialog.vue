@@ -137,7 +137,7 @@ import { ArrowRight } from '@element-plus/icons-vue'
 import SyntaxHighlight from '@/components/SyntaxHighlight.vue'
 import { request } from '@/utils/api'
 import { formatDate } from '@/utils/date'
-import { parseIPList, parseRefIds, entryMatchesIp, triggerStageFamily } from '@/utils/securityStages'
+import { parseIPList, parseRefIds, entryMatchesIp, triggerStageFamily, sharedEntriesCache, subscribeSharedEntriesCache, formatDurationUs } from '@/utils/securityStages'
 import { useCrsRuleIndex } from '@/composables/useCrsRuleIndex'
 import type { APIResponse } from '@/types'
 
@@ -340,7 +340,6 @@ const lists = ref<Array<{ id: number; name: string; system?: number | boolean }>
 // 跨组件共享条目缓存（第 61 轮 P2-2 修复：提升到 securityStages 模块级，
 // IPLocationAction 写入动作经 invalidateSharedEntriesCache 清空——原实现
 // 缓存在本组件 setup 内，快捷弹框的 onChanged 清不到它导致展示恒陈旧）
-import { sharedEntriesCache, subscribeSharedEntriesCache, formatDurationUs } from '@/utils/securityStages'
 const entriesCache = ref<Record<number, string[]>>({ ...sharedEntriesCache })
 // FE65-1：共享缓存失效即重拷本地副本（叠开 IP 处置改名单后徽标/列表即时
 // 刷新——曾仅 loadAll 重拷，开放窗口滞留旧值）

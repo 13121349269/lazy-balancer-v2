@@ -126,3 +126,62 @@ func TestFastFile_UnorderedRejected(t *testing.T) {
 		t.Fatal("descending address order must be rejected")
 	}
 }
+
+// PL-1（第 70 轮 P4）：升序校验不验「嵌套/同址不同 bits」形态——
+// 10.0.0.0/16 与其子段 10.0.1.0/24 地址升序却互相包含，二分可被窄段遮蔽
+// 返回假阴性（「可加载但查询错误」正是 WriteFastFile 注释定义的最坏静默
+// 腐化形态）。须响亮拒绝。
+func TestFastFile_NestedPrefixesRejected(t *testing.T) {
+	dir := t.TempDir()
+	// 宽段 10.0.0.0/16 + 其中段 10.0.1.0/24（升序合法、嵌套违例）
+	v4 := []netip.Prefix{
+		netip.MustParsePrefix("10.0.0.0/16"),
+		netip.MustParsePrefix("10.0.1.0/24"),
+	}
+	nestedPath := filepath.Join(dir, "nested-v4.fast")
+	if err := WriteFastFile(nestedPath, v4, nil); err != nil {
+		t.Fatalf("WriteFastFile: %v", err)
+	}
+	if _, err := ReadFastFile(nestedPath); err == nil {
+		t.Fatal("nested v4 prefixes (wide + contained sub) must be rejected（二分假阴性）")
+	}
+
+	// 同址不同 bits：10.0.0.0/16 + 10.0.0.0/24（Compare==0 非降序、包含）
+	sameAddr := []netip.Prefix{
+		netip.MustParsePrefix("10.0.0.0/16"),
+		netip.MustParsePrefix("10.0.0.0/24"),
+	}
+	sameAddrPath := filepath.Join(dir, "same-addr-v4.fast")
+	if err := WriteFastFile(sameAddrPath, sameAddr, nil); err != nil {
+		t.Fatalf("WriteFastFile: %v", err)
+	}
+	if _, err := ReadFastFile(sameAddrPath); err == nil {
+		t.Fatal("same-address different-bits v4 prefixes must be rejected（二分假阴性）")
+	}
+
+	// v6 同口径：2001:db8::/32 + 2001:db8:1::/48
+	v6 := []netip.Prefix{
+		netip.MustParsePrefix("2001:db8::/32"),
+		netip.MustParsePrefix("2001:db8:1::/48"),
+	}
+	v6Path := filepath.Join(dir, "nested-v6.fast")
+	if err := WriteFastFile(v6Path, nil, v6); err != nil {
+		t.Fatalf("WriteFastFile: %v", err)
+	}
+	if _, err := ReadFastFile(v6Path); err == nil {
+		t.Fatal("nested v6 prefixes must be rejected（二分假阴性）")
+	}
+
+	// 反例：相邻（不嵌套）合法文件不受影响——10.0.0.0/24 + 10.0.1.0/24
+	adjacent := []netip.Prefix{
+		netip.MustParsePrefix("10.0.0.0/24"),
+		netip.MustParsePrefix("10.0.1.0/24"),
+	}
+	adjacentPath := filepath.Join(dir, "adjacent.fast")
+	if err := WriteFastFile(adjacentPath, adjacent, nil); err != nil {
+		t.Fatalf("WriteFastFile: %v", err)
+	}
+	if _, err := ReadFastFile(adjacentPath); err != nil {
+		t.Fatalf("adjacent disjoint prefixes must load, got: %v", err)
+	}
+}

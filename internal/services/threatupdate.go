@@ -509,13 +509,13 @@ func markSourceSuccess(id int, entryCount int, finished string, trigger string, 
 	version := time.Now().UTC().Format("2006.01.02")
 	next := threatNextSlot(time.Now().UTC())
 	if len(rawHash) > 0 {
-		if _, err := db.DB.Exec(`UPDATE security_threat_sources SET update_status='success', message='', entry_count=?, version=?, finished_at=?, next_update=IIF(?='auto' AND (COALESCE(next_update,'')='' OR next_update<=datetime('now')), ?, next_update), consecutive_failures=0, raw_hash=?, updated_at=datetime('now') WHERE id=?`,
+		if _, err := db.DB.Exec(`UPDATE security_threat_sources SET update_status='success', message='', entry_count=?, version=?, finished_at=?, `+threatSlotAdvanceSQL+`, consecutive_failures=0, raw_hash=?, updated_at=datetime('now') WHERE id=?`,
 			entryCount, version, finished, trigger, next, rawHash[0], id); err != nil {
 			Logf("error", "威胁情报库: 更新源成功状态失败: %v", err)
 		}
 	} else {
 		// raw_hash 缺省（快路径内容未变）不覆写该列（第 55 轮 P3-1 修法）。
-		if _, err := db.DB.Exec(`UPDATE security_threat_sources SET update_status='success', message='', entry_count=?, version=?, finished_at=?, next_update=IIF(?='auto' AND (COALESCE(next_update,'')='' OR next_update<=datetime('now')), ?, next_update), consecutive_failures=0, updated_at=datetime('now') WHERE id=?`,
+		if _, err := db.DB.Exec(`UPDATE security_threat_sources SET update_status='success', message='', entry_count=?, version=?, finished_at=?, `+threatSlotAdvanceSQL+`, consecutive_failures=0, updated_at=datetime('now') WHERE id=?`,
 			entryCount, version, finished, trigger, next, id); err != nil {
 			Logf("error", "威胁情报库: 更新源成功状态失败: %v", err)
 		}
@@ -617,7 +617,7 @@ func failSourceRow(id int, finished string, cause error, trigger string) {
 		Logf("error", "威胁情报库: 失败计数更新失败: %v", err)
 	}
 	next := threatNextSlot(time.Now().UTC())
-	if _, err := db.DB.Exec(`UPDATE security_threat_sources SET update_status='failed', message=?, finished_at=?, next_update=IIF(?='auto' AND (COALESCE(next_update,'')='' OR next_update<=datetime('now')), ?, next_update), updated_at=datetime('now') WHERE id=?`,
+	if _, err := db.DB.Exec(`UPDATE security_threat_sources SET update_status='failed', message=?, finished_at=?, `+threatSlotAdvanceSQL+`, updated_at=datetime('now') WHERE id=?`,
 		cause.Error(), finished, trigger, next, id); err != nil {
 		Logf("error", "威胁情报库: 失败状态落库失败: %v", err)
 	}

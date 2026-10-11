@@ -10,11 +10,6 @@
     </template>
 
     <el-form :model="form" label-width="120px" class="settings-form" :disabled="readOnly">
-      <!-- 不用 el-form-item label(2026-09-19 用户报障修复):el-radio-group
-           会把组容器 DIV 的 id 注册为表单项输入 id,label for 随之指向
-           DIV——label 仅可指向表单控件,Firefox 报「Incorrect use of
-           <label for=FORM_ELEMENT>」。改为自管标签行,语义等价零告警;
-           120px 对齐与下方 el-form-item 一致。 -->
       <!-- 原生表单行（2026-10-11 用户裁定：对齐统一走 el-form-item，弃自管标签行；
            Firefox label-for 控制台告警为 EP 上游已知形态，非用户可见） -->
       <el-form-item label="节点模式">
@@ -168,7 +163,12 @@ watch(
 
 // 注册令牌为一次性凭据：注册流程结束（提交/取消/成功关闭）后不回填，避免下次打开残留旧令牌
 watch(registrationOpen, (open) => {
-  if (!open) form.register_token = ''
+  if (!open) {
+    form.register_token = ''
+    // FE-70-7：X/ESC 直闭不走 closeRegistration——复位对齐实际节点模式，否则
+    // 主节点表单错显「从节点」（曾等 status 轮询 ≤15s 才自愈）
+    selectedMode.value = props.status?.node_mode ?? 'master'
+  }
 })
 
 const handleModeChange = (value: string | number | boolean): void => {
@@ -184,8 +184,8 @@ const handleModeChange = (value: string | number | boolean): void => {
 }
 
 const closeRegistration = (): void => {
+  // 关闭路径统一收口 watch(registrationOpen)：令牌清空 + selectedMode 复位（FE-70-7）
   registrationOpen.value = false
-  selectedMode.value = props.status?.node_mode ?? 'master'
 }
 
 const saveSyncInterval = (): void => {

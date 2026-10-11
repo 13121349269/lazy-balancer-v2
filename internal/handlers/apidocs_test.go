@@ -591,3 +591,50 @@ func routesEntry(t *testing.T, key string) apiDocRoute {
 	t.Fatalf("route %s missing from apiDocRoutes", key)
 	return apiDocRoute{}
 }
+
+// APIMCP-A2（第 70 轮）：任务 ID 是 "threat"/"cert-job:5" 等字符串——OpenAPI
+// 对 /system/tasks/{id} 族六个端点的路径参数必须保留 type: string（与其余
+// 数字 :id 路由的 integer 判定分流）；MCP 侧同参数一直正确标 string，两侧
+// 此前自相矛盾。
+func TestBuildOpenAPIYAML_tasksPathParametersStayString(t *testing.T) {
+	// Given
+	var document struct {
+		Paths map[string]map[string]struct {
+			Parameters []struct {
+				Name   string `yaml:"name"`
+				In     string `yaml:"in"`
+				Schema struct {
+					Type string `yaml:"type"`
+				} `yaml:"schema"`
+			} `yaml:"parameters"`
+		} `yaml:"paths"`
+	}
+
+	// When
+	err := yaml.Unmarshal([]byte(buildOpenAPIYAML()), &document)
+
+	// Then
+	if err != nil {
+		t.Fatalf("parse generated OpenAPI YAML: %v", err)
+	}
+	for _, operation := range []struct{ path, method string }{
+		{"/system/tasks/{id}/logs", "get"},
+		{"/system/tasks/{id}/history", "get"},
+		{"/system/tasks/{id}/trigger", "post"},
+		{"/system/tasks/{id}/toggle", "post"},
+		{"/system/tasks/{id}/control", "post"},
+		{"/system/tasks/{id}/cancel", "post"},
+	} {
+		parameters := document.Paths[operation.path][operation.method].Parameters
+		if len(parameters) != 1 || parameters[0].Name != "id" || parameters[0].In != "path" {
+			t.Fatalf("%s %s parameters=%+v", operation.method, operation.path, parameters)
+		}
+		if parameters[0].Schema.Type != "string" {
+			t.Errorf("%s %s id schema type=%q, want string (task IDs such as \"threat\" or \"cert-job:5\" are strings)", operation.method, operation.path, parameters[0].Schema.Type)
+		}
+	}
+	// 回归形状：数字 :id 路由不受 tasks 分流影响，保持 integer。
+	if parameters := document.Paths["/users/{id}"]["put"].Parameters; len(parameters) != 1 || parameters[0].Schema.Type != "integer" {
+		t.Fatalf("PUT /users/{id} parameters=%+v, want id integer", parameters)
+	}
+}

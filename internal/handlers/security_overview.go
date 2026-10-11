@@ -143,6 +143,11 @@ func (h *Handlers) GetRuleStageStats(c *gin.Context) {
 				wafCnt += cnt
 			}
 		}
+		// SEC-B-2（第 70 轮）：分段耗时迭代失败不再静默——与 F62-21 查询失败
+		// 同待遇记 warn（耗时为增强信息，响应仍 200，已收样本保留）。
+		if err := trows.Err(); err != nil {
+			services.Logf("warn", "stage-stats timing rows iteration failed for %s: %v", ruleCaddyID, err)
+		}
 		trows.Close()
 	} else {
 		// 第 62 轮 F62-21:查询失败不再静默——留 warn 便于排查(响应仍 200,

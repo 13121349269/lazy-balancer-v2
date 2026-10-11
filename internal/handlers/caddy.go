@@ -108,10 +108,29 @@ func caddyAdminReady(adminURL string) bool {
 	return response.StatusCode < http.StatusInternalServerError
 }
 
+// supervisorAlive LBH-B-1（第 70 轮 P4）：监督器在位判定——pid 标记在场且
+// 所记 pid 仍存活（/proc/<pid> 目录在场；caddyLivePID 同基建，共用
+// caddyProcRoot 注入缝）。标记内容非正整数（旧格式/损坏）视为陈旧。
+func supervisorAlive() bool {
+	data, err := os.ReadFile(caddySupervisorPidFile)
+	if err != nil {
+		return false
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || pid <= 0 {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(caddyProcRoot, strconv.Itoa(pid)))
+	return err == nil && info.IsDir()
+}
+
 func startCaddy(adminURL string) error {
 	// F62-28:监督器在场(标记文件)时优先委托(删 pause → 监督器 ≤1s 启动),
 	// 等 admin 就绪;标记不在场(测试环境/监督器死亡)直接 spawn。
-	if _, err := os.Stat(caddySupervisorPidFile); err == nil {
+	// LBH-B-1（第 70 轮 P4）：在场判定升级为 pid 存活校验——标记文件在但
+	// pid 已死（监督器被杀/容器异常重启残留）时，委托只会空等超时后报错；
+	// 删陈旧标记走直启（与标记不在场同语义）。
+	if supervisorAlive() {
 		_ = os.Remove(caddyPauseFile)
 		supervisorDeadline := time.Now().Add(caddySupervisorWaitTimeout)
 		for time.Now().Before(supervisorDeadline) {
@@ -126,6 +145,7 @@ func startCaddy(adminURL string) error {
 		// 重试，返回明确错误即可。
 		return fmt.Errorf("Caddy 监督器在场但 %s 内未拉起就绪的 Caddy（pause 已解除，监督器仍在重试，请稍后复查或检查容器日志）", caddySupervisorWaitTimeout)
 	}
+	_ = os.Remove(caddySupervisorPidFile) // 陈旧标记清除（不在场时为无害 no-op）
 	cmd := caddyRunCommand()
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

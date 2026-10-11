@@ -28,6 +28,26 @@ const (
 	updateMaxAttempts = 3
 )
 
+// 排程槽推进门共享 SQL 片段（SEC-C-2，第 70 轮审计）：仅 auto 触发且现存
+// 槽空/过期才推进——手动触发不动预约、未来槽不回拨。此前同一谓词在
+// CRS/IP2Region/威胁情报三族 8 处内联重复（历史同型漏同步两起），此处收敛
+// 为单一事实源；参数序恒为「触发来源（?='auto'）、下一槽值（?）」。
+// 分族前缀：版本表族（CRS/IP2Region）在谓词前叠加 auto_update=1 门；
+// 威胁源族无 auto_update 列（启用门走 WHERE update_enabled=1 重排，见
+// scheduleThreatSources），不加该前缀。advanceVersionSlotIfDue 的
+// IIF(auto_update=1, ?, next_update) 是另一形态（触发门由调用方
+// advanceSlotIfAuto 前置，此处只判 auto_update），刻意不并入。
+const (
+	// slotAdvanceGateSQL 推进门核心谓词（两族共用）。
+	slotAdvanceGateSQL = `?='auto' AND (COALESCE(next_update,'')='' OR next_update<=datetime('now'))`
+	// versionTableSlotAdvanceSQL 版本表族（security_crs_version/
+	// security_ip2region_version）的 next_update 赋值片段。
+	versionTableSlotAdvanceSQL = `next_update=IIF(auto_update=1 AND ` + slotAdvanceGateSQL + `, ?, next_update)`
+	// threatSlotAdvanceSQL 威胁源族（security_threat_sources）的
+	// next_update 赋值片段。
+	threatSlotAdvanceSQL = `next_update=IIF(` + slotAdvanceGateSQL + `, ?, next_update)`
+)
+
 // updateAttemptWaits 第 N 次失败后的重试等待（30s/60s）。
 var updateAttemptWaits = []time.Duration{30 * time.Second, 60 * time.Second}
 

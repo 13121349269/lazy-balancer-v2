@@ -328,6 +328,11 @@ func (h *Handlers) ListIPLists(c *gin.Context) {
 				}
 			}
 		}
+		// SEC-A-3（第 70 轮）：迭代失败与查询失败同待遇（U3-P4-4 降级语义——
+		// 记 warn，已收行数保留，系统名单条数可能少计/显示 0）。
+		if err := trows.Err(); err != nil {
+			services.Logf("warn", "威胁库条数查询迭代失败（系统名单条数可能不完整）: %v", err)
+		}
 		trows.Close()
 	}
 	lists := []ipListRow{}

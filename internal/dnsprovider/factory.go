@@ -38,7 +38,11 @@ func newProviderFromCredentials(rawJSON, dataDir string) (Provider, error) {
 	}
 
 	// Support credentials saved by the UI certificate-configs form, which use
-	// auth_mode, app_id, app_token (DNSPod) or auth_mode, secret_id, secret_key (Tencent).
+	// auth_mode, app_id, app_token (DNSPod) or auth_mode, secret_id, secret_key
+	// (Tencent). legacy app_id+app_token→api_token 的拼接在此存在双实现（协议
+	// 面归一化）：本处与 internal/services/dnsproviders/dnspod.go 的
+	// buildCredentials（UI 面 canonical 产出，AD-2 第 70 轮）——任一侧改
+	// 字段名/拼接格式须双侧同步。
 	if creds.Mode == "" {
 		var legacy struct {
 			AuthMode  string `json:"auth_mode"`

@@ -10,9 +10,8 @@ export interface CurrentUser {
 
 export interface UserListItem extends CurrentUser {
   // F63-B7-5:原 Omit<CurrentUser,'is_enabled'> + 立即重加 is_enabled 是
-  // 无操作变换——直接 extends 消除冗余
-  is_enabled: boolean
-  mfa_enabled?: boolean
+  // 无操作变换——直接 extends 消除冗余（FE-70-11：is_enabled/mfa_enabled
+  // 两条 extends 已继承的无操作重声明一并删除）
   created_at?: string | null
   last_login?: string | null
 }

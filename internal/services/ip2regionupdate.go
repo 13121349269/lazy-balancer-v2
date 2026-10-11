@@ -322,7 +322,7 @@ func (m *IP2RegionUpdateManager) run(trigger string, rc *taskengine.RunContext) 
 		writeIP2RegionUpdateLog("INFO", string(IP2RegionStatusSuccess), "已是最新版本，无需更新")
 		if _, err := db.DB.Exec(
 			// 排程槽生命周期（2026-10-11 用户裁定）：仅 auto 且现存槽空/过期才推进——手动触发不动预约、未来槽不回拨。
-			"UPDATE security_ip2region_version SET update_status='success', message='已是最新版本', finished_at=datetime('now'), consecutive_failures=0, next_update=IIF(auto_update=1 AND ?='auto' AND (COALESCE(next_update,'')='' OR next_update<=datetime('now')), ?, next_update) WHERE id=1",
+			"UPDATE security_ip2region_version SET update_status='success', message='已是最新版本', finished_at=datetime('now'), consecutive_failures=0, "+versionTableSlotAdvanceSQL+" WHERE id=1",
 			trigger, versionTableNextSlot("security_ip2region_version", time.Now().UTC()),
 		); err != nil {
 			Logf("warn", "ip2region update: failed to record latest-version skip: %v", err)
@@ -440,7 +440,7 @@ func (m *IP2RegionUpdateManager) run(trigger string, rc *taskengine.RunContext) 
 	os.Remove(ip2regionLivePath + ".bak")
 
 	if _, err := db.DB.Exec(
-		"UPDATE security_ip2region_version SET version=?, updated_at=datetime('now'), update_status='success', message='', finished_at=datetime('now'), consecutive_failures=0, next_update=IIF(auto_update=1 AND ?='auto' AND (COALESCE(next_update,'')='' OR next_update<=datetime('now')), ?, next_update) WHERE id=1",
+		"UPDATE security_ip2region_version SET version=?, updated_at=datetime('now'), update_status='success', message='', finished_at=datetime('now'), consecutive_failures=0, "+versionTableSlotAdvanceSQL+" WHERE id=1",
 		tag, trigger, versionTableNextSlot("security_ip2region_version", time.Now().UTC()),
 	); err != nil {
 		Logf("error", "ip2region update: failed to record success: %v", err)
@@ -473,10 +473,8 @@ func (m *IP2RegionUpdateManager) advanceSlotIfAuto(trigger string) {
 }
 
 func (m *IP2RegionUpdateManager) fail(cause error) {
-	// 连续失败计数 +1：仅首次失败写操作审计，后续重试只写组件日志（R35 I1），
-	// 避免代理持续故障时每小时刷一条操作日志稀释审计线索。
-	// 先读当前计数，审计判定用「当前计数+1」（与 UPDATE 落库同一数值来源）：
-	// UPDATE 失败时判定不会回退到旧计数，避免第 2 次失败重复写审计（R36 F3）。
+	// 连续失败计数 +1（失败趋势可观测；操作审计由 run 的 defer 单记——
+	// U1-P3-2 收敛后内联首败审计已撤）。
 	if _, err := db.DB.Exec(
 		"UPDATE security_ip2region_version SET update_status='failed', message=?, finished_at=datetime('now'), consecutive_failures=consecutive_failures+1 WHERE id=1",
 		cause.Error(),
@@ -702,7 +700,7 @@ func (m *IP2RegionUpdateManager) successAfterReloadFailOpen(tag string, reloadEr
 		warn += "内存 searcher 未切换，重启后生效"
 	}
 	if _, err := db.DB.Exec(
-		"UPDATE security_ip2region_version SET version=?, updated_at=datetime('now'), update_status='success', message=?, finished_at=datetime('now'), consecutive_failures=0, next_update=IIF(auto_update=1 AND ?='auto' AND (COALESCE(next_update,'')='' OR next_update<=datetime('now')), ?, next_update) WHERE id=1",
+		"UPDATE security_ip2region_version SET version=?, updated_at=datetime('now'), update_status='success', message=?, finished_at=datetime('now'), consecutive_failures=0, "+versionTableSlotAdvanceSQL+" WHERE id=1",
 		tag, warn, m.currentTrigger(), versionTableNextSlot("security_ip2region_version", time.Now().UTC()),
 	); err != nil {
 		Logf("error", "ip2region update: failed to record fail-open success: %v", err)

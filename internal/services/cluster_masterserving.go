@@ -138,7 +138,6 @@ func masterSyncServingRound(ctx context.Context, now time.Time, w *masterServing
 	for _, n := range nodes {
 		seen[n.id] = true
 		lastSeen := parseNodeLastSeen(n.seenRaw)
-		_ = lastSeen
 		if lastSeen.IsZero() || now.Sub(lastSeen) > threshold {
 			offlineCount++
 			if !w.offlineAlerted[n.id] {

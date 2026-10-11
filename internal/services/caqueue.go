@@ -59,19 +59,22 @@ var (
 )
 
 // caExecutionTimeout 是单域名签发的执行预算。单域名签发器内部分段最坏耗时
-// 之和为注册 30s + DNS 传播 5m + 验证 10m + 订单就绪 3m + finalize 10m +
-// 订单有效 5m ≈ 33.5m，略高于本基础值——极端慢签发会被判执行超时后走
-// 重试退避（预算值不调整，维持原 30min 快速失败口径）。
+// 之和为注册 30s + DNS 传播 5m + 递归逐域 2m + 验证 10m + 订单就绪 3m +
+// finalize 10m + 订单有效 5m ≈ 33.5m，略高于本基础值——极端慢签发会被判
+// 执行超时后走重试退避（预算值不调整，维持原 30min 快速失败口径）。
 const caExecutionTimeout = 30 * time.Minute
 
 // caExecutionTimeoutMax 是按域名数缩放后的执行预算封顶：多域名签发的
-// DNS 传播 + 验证按域名数串行叠加（双域名最坏 ≈ 48.5min，每多一域再增
-// 15min），固定 30min 会把合法慢签发误判为执行超时并白烧重试次数；
-// 每域 +10min 的缩放预算对该和为近似，封顶 60min。
+// DNS 传播 + 递归逐域 + 验证按域名数串行叠加（CERT-B 第 70 轮：每域最坏
+// 增量 ≈17min——传播 5m + 递归 2m + 验证 10m），固定 30min 会把合法慢
+// 签发误判为执行超时并白烧重试次数；每域 +15min 的缩放预算贴近该和。
+// 封顶 60min：3 域即贴合封顶（30+15×2=60min），4+ 域超出封顶部分按快速
+// 失败立场截断（与 retiredCAQueue 惰性摘除的 age-out 余量耦合，不动）。
 const caExecutionTimeoutMax = 60 * time.Minute
 
 // caExecutionTimeoutFor 按授权域名数缩放执行预算：单域名 30min，每增加
-// 一个域名追加 10min，封顶 60min。
+// 一个域名追加 15min（CERT-B 第 70 轮：原 10min 对每域最坏 ≈17min 单边
+// 低估，慢签发白烧重试次数），封顶 60min。
 func caExecutionTimeoutFor(domains string) time.Duration {
 	count := 0
 	for _, domain := range strings.Split(domains, ",") {
@@ -82,7 +85,7 @@ func caExecutionTimeoutFor(domains string) time.Duration {
 	if count < 1 {
 		count = 1
 	}
-	timeout := caExecutionTimeout + time.Duration(count-1)*10*time.Minute
+	timeout := caExecutionTimeout + time.Duration(count-1)*15*time.Minute
 	if timeout > caExecutionTimeoutMax {
 		return caExecutionTimeoutMax
 	}

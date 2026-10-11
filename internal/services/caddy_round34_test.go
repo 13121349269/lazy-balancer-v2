@@ -148,9 +148,14 @@ func TestGenerateRuleServerContext_gatesByEnableTLSAndEnabledUpstreams(t *testin
 
 	// When 主规则 enable_tls=0 的对照
 	cfgOff := GenerateRuleServerContext("lb_ctx_main_off", 9443, "http", "mainoff.example.test")
-	// Then 不加载证书
+	// Then 不加载证书；LBS-A-3（第 70 轮 P5）：无策略时 tls_connection_policies
+	// 为空切片而非 nil——JSON 序列化输出 [] 而非 null（消费方按数组形状解构）。
 	if _, hasTLS := cfgOff["apps"].(map[string]interface{})["tls"].(map[string]interface{}); hasTLS {
 		t.Fatal("enable_tls=0 的规则不应生成 tls.load_files")
+	}
+	serverOff := cfgOff["apps"].(map[string]interface{})["http"].(map[string]interface{})["servers"].(map[string]interface{})["http_9443"].(map[string]interface{})
+	if serverOff["tls_connection_policies"] == nil {
+		t.Fatal("LBS-A-3：无策略时 tls_connection_policies 应为空数组（非 nil/JSON null）")
 	}
 }
 

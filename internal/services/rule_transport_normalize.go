@@ -23,6 +23,15 @@ import "lazy-balancer-v2/internal/models"
 // ③ TCP 行 HTTP 专属七字段归零（LBH-A-U1 同族，2026-10-11 裁定并入导出侧）。
 // 调用方：snapshotRules（主端导出）、insertSnapshotRules（从端落库）、
 // 备份导入后置归一——三面同构是 rules 节哈希主从相等的不变量基础。
+//
+// CORE-2（第 70 轮审计裁定，采用头注声明防重报）：传输族刻意窄于保存族
+// （rules.go 保存/更新路径的 TCP 零值化清单还含 tls_source/acme_config_id/
+// ca_provider_id/tls_http_redirect 与 stage 拦截页 4 列）——传输/导入/迁移产生
+// 的 TCP 行残留这些列已推演为惰性无害：全部 ACME 消费方（签发/续签/证书
+// 回插）都以 enable_tls=1 联合门控，而 enable_tls 在本函数与迁移侧恒归 0，
+// 残留引用不可达；stage 页 4 列同理仅 HTTP 渲染消费。不为清单收敛而扩面
+// （扩面会改变 canonical 哈希基线，触发一轮全量重放），残留列由下次规则
+// 编辑经保存族归一自愈。
 func normalizeRuleForTransport(rule *models.LbRule) {
 	if rule.RequestBodyMaxSizeMB < 0 {
 		rule.RequestBodyMaxSizeMB = 0

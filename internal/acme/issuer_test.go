@@ -234,9 +234,17 @@ func TestIssuer_preCleanup_spares_concurrent_challenge_values(t *testing.T) {
 // startFakeDNSServer 在随机端口同时监听 UDP/TCP（probeTXT 会先 UDP 后 TCP 回退，
 // 仅监听 UDP 时 TCP 回退会以 connection refused 覆盖真实的 RCODE 错误）。
 func startFakeDNSServer(t *testing.T, respond func(query *dns.Msg) *dns.Msg) string {
+	return startFakeDNSServerW(t, func(_ dns.ResponseWriter, query *dns.Msg) *dns.Msg {
+		return respond(query)
+	})
+}
+
+// startFakeDNSServerW 同 startFakeDNSServer，但回调可见 dns.ResponseWriter
+// （按传输层 udp/tcp 区分应答形态时使用，如 AD-3 的 TC 截断应答）。
+func startFakeDNSServerW(t *testing.T, respond func(w dns.ResponseWriter, query *dns.Msg) *dns.Msg) string {
 	t.Helper()
 	handler := dns.HandlerFunc(func(w dns.ResponseWriter, query *dns.Msg) {
-		_ = w.WriteMsg(respond(query))
+		_ = w.WriteMsg(respond(w, query))
 	})
 	packetConn, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
@@ -342,6 +350,43 @@ func TestProbeTXT_nxdomain_is_miss_not_error(t *testing.T) {
 	}
 	if hit || found != nil {
 		t.Fatalf("hit=%v found=%v, want empty miss", hit, found)
+	}
+}
+
+// AD-3（第 70 轮审计）：UDP 应答 TC=1（截断）时 Answer 段不可信（UDP
+// 512B 载荷上限内常被截空）——同域并存 TXT 较多（并发签发+残留）时权威
+// UDP 应答恒截断，若按 miss 处理则 authReady 永假 → 假阴性烧一次签发
+// （LE 5 次/时配额）。必须 continue 承接到 TCP 重查。
+func TestProbeTXT_truncated_udp_falls_back_to_tcp(t *testing.T) {
+	// Given：UDP 恒回 TC=1 空 Answer，TCP 回完整命中应答
+	addr := startFakeDNSServerW(t, func(w dns.ResponseWriter, query *dns.Msg) *dns.Msg {
+		if w.RemoteAddr().Network() == "tcp" {
+			m := new(dns.Msg)
+			m.SetReply(query)
+			m.Answer = append(m.Answer, &dns.TXT{
+				Hdr: dns.RR_Header{Name: query.Question[0].Name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 60},
+				Txt: []string{"expected"},
+			})
+			return m
+		}
+		m := new(dns.Msg)
+		m.SetReply(query)
+		m.Truncated = true
+		return m
+	})
+
+	// When
+	hit, found, err := probeTXT(context.Background(), addr, "_acme-challenge.example.com.", "expected", false)
+
+	// Then：TCP 承接后命中，而不是把截断的空 Answer 当 miss
+	if err != nil {
+		t.Fatalf("truncated UDP answer must fall back to TCP, got error: %v", err)
+	}
+	if !hit {
+		t.Fatal("hit=false, want TCP fallback to observe the TXT record")
+	}
+	if len(found) != 1 || found[0] != "expected" {
+		t.Fatalf("found=%v, want [expected]", found)
 	}
 }
 

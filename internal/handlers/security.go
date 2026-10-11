@@ -386,6 +386,17 @@ func (h *Handlers) CreateSecurityBlockPage(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "拦截页面名称不能为空"})
 		return
 	}
+	// SEC-A-2（第 70 轮）：name/description 补 rune 封顶（SEC40-B1-4 家族漏收敛
+	// 点——策略/自定义规则同口径 100/500；DB 列无长度约束，超长串随列表响应/
+	// 审计详情放大）。
+	if utf8.RuneCountInString(req.Name) > 100 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "拦截页面名称不能超过 100 字符"})
+		return
+	}
+	if utf8.RuneCountInString(req.Description) > 500 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "拦截页面描述不能超过 500 字符"})
+		return
+	}
 	if strings.TrimSpace(req.Content) == "" {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "拦截页面内容不能为空"})
 		return
@@ -446,6 +457,15 @@ func (h *Handlers) UpdateSecurityBlockPage(c *gin.Context) {
 	}
 	if strings.TrimSpace(req.Name) == "" {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "拦截页面名称不能为空"})
+		return
+	}
+	// SEC-A-2（第 70 轮）：name/description rune 封顶（与创建同口径）。
+	if utf8.RuneCountInString(req.Name) > 100 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "拦截页面名称不能超过 100 字符"})
+		return
+	}
+	if utf8.RuneCountInString(req.Description) > 500 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "拦截页面描述不能超过 500 字符"})
 		return
 	}
 	if strings.TrimSpace(req.Content) == "" {

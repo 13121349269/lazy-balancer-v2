@@ -526,18 +526,22 @@ func TestUpdateConfig_appliesExactlyOnce(t *testing.T) {
 // 应答→reapply_last_good churn；败者=直启实例时假 500）。修复后返回明确错误，
 // 留给监督器继续拉起。
 func TestStartCaddy_supervisorTimeoutDoesNotDirectSpawn(t *testing.T) {
-	// Given：监督器标记在场 + admin 死端口不就绪 + 调小委托等待
+	// Given：监督器标记在场（pid 存活——LBH-B-1 起在场判定含 pid 校验，
+	// 伪 /proc 种活 pid）+ admin 死端口不就绪 + 调小委托等待
 	dir := t.TempDir()
 	pidFile := filepath.Join(dir, "supervisor.pid")
 	if err := os.WriteFile(pidFile, []byte("12345"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	oldPid, oldPause, oldTimeout := caddySupervisorPidFile, caddyPauseFile, caddySupervisorWaitTimeout
+	procRoot := t.TempDir()
+	seedProcStat(t, procRoot, "12345", "caddy-superv", 'S')
+	oldPid, oldPause, oldTimeout, oldProc := caddySupervisorPidFile, caddyPauseFile, caddySupervisorWaitTimeout, caddyProcRoot
 	caddySupervisorPidFile = pidFile
 	caddyPauseFile = filepath.Join(dir, "paused")
 	caddySupervisorWaitTimeout = 300 * time.Millisecond
+	caddyProcRoot = procRoot
 	t.Cleanup(func() {
-		caddySupervisorPidFile, caddyPauseFile, caddySupervisorWaitTimeout = oldPid, oldPause, oldTimeout
+		caddySupervisorPidFile, caddyPauseFile, caddySupervisorWaitTimeout, caddyProcRoot = oldPid, oldPause, oldTimeout, oldProc
 	})
 
 	startInvoked := make(chan struct{})
@@ -559,5 +563,56 @@ func TestStartCaddy_supervisorTimeoutDoesNotDirectSpawn(t *testing.T) {
 	case <-startInvoked:
 		t.Fatal("监督器在场且委托超时——不得落直启回退（双启竞态）")
 	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// LBH-B-1（第 70 轮 P4）：监督器 pid 标记在场但 pid 已死（监督器被杀/容器
+// 异常重启残留）——陈旧标记不得让 startCaddy 走委托路径空等超时后报错；
+// 应删陈旧标记落直启（与标记不在场同语义）。RED：修复前委托路径只看标记
+// 在场，admin 已就绪时返回 nil 但标记保留、不直启（下次 startCaddy 仍被
+// 陈旧标记劫持到委托路径）。
+func TestStartCaddy_staleSupervisorMarkerFallsBackToDirectSpawn(t *testing.T) {
+	// Given：标记在场记死 pid + 空 /proc 视图 + 就绪 admin
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "supervisor.pid")
+	if err := os.WriteFile(pidFile, []byte("12345"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	oldPid, oldPause, oldTimeout, oldProc := caddySupervisorPidFile, caddyPauseFile, caddySupervisorWaitTimeout, caddyProcRoot
+	caddySupervisorPidFile = pidFile
+	caddyPauseFile = filepath.Join(dir, "paused")
+	caddySupervisorWaitTimeout = 300 * time.Millisecond
+	caddyProcRoot = t.TempDir() // 空伪 /proc：pid 12345 不在=死
+	t.Cleanup(func() {
+		caddySupervisorPidFile, caddyPauseFile, caddySupervisorWaitTimeout, caddyProcRoot = oldPid, oldPause, oldTimeout, oldProc
+	})
+
+	startInvoked := make(chan struct{}, 1)
+	original := caddyRunCommand
+	caddyRunCommand = func() *exec.Cmd {
+		startInvoked <- struct{}{}
+		return exec.Command("sh", "-c", "sleep 1")
+	}
+	t.Cleanup(func() { caddyRunCommand = original })
+
+	fakeAdmin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(fakeAdmin.Close)
+
+	// When
+	err := startCaddy(fakeAdmin.URL)
+
+	// Then：直启成功 + 陈旧标记已删（后续 startCaddy 不再被劫持）
+	if err != nil {
+		t.Fatalf("陈旧监督器标记应走直启: %v", err)
+	}
+	select {
+	case <-startInvoked:
+	case <-time.After(time.Second):
+		t.Fatal("未落直启路径（仍被陈旧标记劫持到委托路径）")
+	}
+	if _, statErr := os.Stat(pidFile); !os.IsNotExist(statErr) {
+		t.Fatalf("陈旧标记应被删除, stat err=%v", statErr)
 	}
 }

@@ -361,8 +361,12 @@ func NewCertificateService() *CertificateService {
 // 调到非 context-aware 的 caddyReloader，挂起时裸等会拖死调用方。超时后放
 // 弃本轮调度——deployment_available_after 已落库，后续补扫/重启可再拾起；
 // DeployLock 按规则串行 + 终态 CAS 保证滞留回调即便最终退出也不会并发部署。
-func waitDoneOrTimeout(done <-chan struct{}, jobID int, what string) {
-	timeout := 30 * time.Second
+// CERT-C（第 70 轮）：timeout<=0 回退 30s；调用点统一传 s.cancelWaitTimeout
+// （测试缝，与 cancelDeploymentRetry/Stop 的同模式同口径）。
+func waitDoneOrTimeout(done <-chan struct{}, timeout time.Duration, jobID int, what string) {
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
 	select {
 	case <-done:
 	case <-time.After(timeout):
@@ -389,7 +393,7 @@ func (s *CertificateService) scheduleDeploymentRetry(jobID int, ruleID string, d
 				// R57 A-#2：与 cancelDeploymentRetries 同口径的有界等待——
 				// 回调链条最终调到非 context-aware 的 caddyReloader，挂起
 				// 时裸等会拖死调用方（签发 goroutine/Resume/启动恢复）。
-				waitDoneOrTimeout(previous.done, jobID, "pending timer")
+				waitDoneOrTimeout(previous.done, s.cancelWaitTimeout, jobID, "pending timer")
 			}
 			continue
 		}
@@ -409,7 +413,7 @@ func (s *CertificateService) scheduleDeploymentRetry(jobID int, ruleID string, d
 			}
 			s.timerMu.Unlock()
 			for _, callback := range running {
-				waitDoneOrTimeout(callback.done, jobID, "在途部署回调")
+				waitDoneOrTimeout(callback.done, s.cancelWaitTimeout, jobID, "在途部署回调")
 			}
 			continue
 		}
@@ -1314,6 +1318,12 @@ func (s *CertificateService) renewExpiringCertificates() {
 				} else {
 					RecordAuditLog("system", "签发失败", "证书任务", FormatAuditDetail(AuditJobPart(j.ID), AuditRulePart(j.RuleID), AuditResultPart("max_attempts")), "")
 				}
+			} else {
+				// CERT-A（第 70 轮）：issued/failed 任务无终局转换可做——此前
+				// 零状态变化/零日志/零审计，每 6h 被重复选出并入摘要后静默
+				// continue。留 warn 痕使「仅手动重试可达」对操作者可见（幂等：
+				// 6h 一条，重置 renewal_attempts 才会再进自动重试）。
+				Logf("warn", "证书任务 %d 已达最大重试次数（%d），仅手动重试可达", j.ID, maxAttempts)
 			}
 			continue
 		}

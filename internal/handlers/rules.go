@@ -1092,6 +1092,22 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	c.JSON(http.StatusCreated, models.APIResponse{Code: 0, Message: "规则已创建", Data: gin.H{"caddy_id": caddyID}})
 }
 
+// retireOldDomainCertJobOrAudit LBH-A-2（第 70 轮 P4）：UpdateRule 域名迁移
+// 三失败分支（事务开启/UPDATE/commit 失败）的「退役旧域任务 + 退役失败补
+// 审计」块逐字三份——收敛为单一 helper，三处只差退役原因/日志相位/审计
+// 前缀文案，行为零变化。R50-N3：退役失败即旧域任务保持原状（'issued'+PEM
+// 行永驻，与 pre-R49 行为等效，fail-safe 但静默），补审计让运维可见。
+func retireOldDomainCertJobOrAudit(c *gin.Context, caddyID string, existingRule models.LbRule, reason, logPhase, auditPrefix string) {
+	oldCanonical := canonicalACMEDomainForJobLookup(existingRule.Domain)
+	if retireErr := retireCertJobsForDomain(db.DB, caddyID, oldCanonical, reversedACMEDomainForm(oldCanonical), reason); retireErr != nil {
+		services.Logf("error", "CRITICAL: UpdateRule: failed to retire old-domain cert job after %s for caddy_id=%s: %v", logPhase, caddyID, retireErr)
+		recordAudit(c, "写入失败", "证书任务", services.FormatAuditDetail(
+			services.AuditRulePart(caddyID),
+			fmt.Sprintf("%s：%v。旧域任务保持原状，请人工检查", auditPrefix, retireErr),
+		))
+	}
+}
+
 func (h *Handlers) UpdateRule(c *gin.Context) {
 
 	caddyID := c.Param("caddy_id")
@@ -1983,16 +1999,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 				// 此处域名未实际迁移，故保留 PEM 作历史、置 'disabled'——旧证留在
 				// 旧域行上无副作用（部署/续期均按新域匹配，不读此行）。
 				services.Logf("error", "UpdateRule: cert job domain migration begin failed for caddy_id=%s: %v", caddyID, txErr)
-				oldCanonical := canonicalACMEDomainForJobLookup(existingRule.Domain)
-				if retireErr := retireCertJobsForDomain(db.DB, caddyID, oldCanonical, reversedACMEDomainForm(oldCanonical), "域名迁移事务开启失败"); retireErr != nil {
-					services.Logf("error", "CRITICAL: UpdateRule: failed to retire old-domain cert job after migration begin failure for caddy_id=%s: %v", caddyID, retireErr)
-					// R50-N3：退役失败即旧域任务保持原状（'issued'+PEM 行永驻，与
-					// pre-R49 行为等效，fail-safe 但静默），补审计让运维可见。
-					recordAudit(c, "写入失败", "证书任务", services.FormatAuditDetail(
-						services.AuditRulePart(caddyID),
-						fmt.Sprintf("域名迁移事务开启失败后旧域任务退役失败：%v。旧域任务保持原状，请人工检查", retireErr),
-					))
-				}
+				retireOldDomainCertJobOrAudit(c, caddyID, existingRule, "域名迁移事务开启失败", "migration begin failure", "域名迁移事务开启失败后旧域任务退役失败")
 			} else {
 				var existingJobID int
 				queryErr := certTx.QueryRow(
@@ -2011,14 +2018,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 							services.Logf("error", "UpdateRule: cert job domain migration rollback failed for caddy_id=%s: %v", caddyID, rbErr)
 						}
 						services.Logf("error", "UpdateRule: failed to update cert job %d domain for caddy_id=%s: %v", existingJobID, caddyID, err)
-						oldCanonical := canonicalACMEDomainForJobLookup(existingRule.Domain)
-						if retireErr := retireCertJobsForDomain(db.DB, caddyID, oldCanonical, reversedACMEDomainForm(oldCanonical), "域名迁移 UPDATE 失败"); retireErr != nil {
-							services.Logf("error", "CRITICAL: UpdateRule: failed to retire old-domain cert job after migration update failure for caddy_id=%s: %v", caddyID, retireErr)
-							recordAudit(c, "写入失败", "证书任务", services.FormatAuditDetail(
-								services.AuditRulePart(caddyID),
-								fmt.Sprintf("域名迁移更新失败后旧域任务退役失败：%v。旧域任务保持原状，请人工检查", retireErr),
-							))
-						}
+						retireOldDomainCertJobOrAudit(c, caddyID, existingRule, "域名迁移 UPDATE 失败", "migration update failure", "域名迁移更新失败后旧域任务退役失败")
 						migrationRolledBack = true
 					} else {
 						services.Logf("info", "UpdateRule: migrated cert job %d domain to %s for caddy_id=%s", existingJobID, newCanonical, caddyID)
@@ -2037,14 +2037,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 						// 旧域任务持原域永驻（sweep 跳过终态），稍后 needJob 为新域
 						// 另建任务破坏「一规则一任务」。与 R48-2/R49 分支同语义退役。
 						services.Logf("error", "UpdateRule: cert job domain migration commit failed for caddy_id=%s: %v", caddyID, err)
-						oldCanonical := canonicalACMEDomainForJobLookup(existingRule.Domain)
-						if retireErr := retireCertJobsForDomain(db.DB, caddyID, oldCanonical, reversedACMEDomainForm(oldCanonical), "域名迁移 commit 失败"); retireErr != nil {
-							services.Logf("error", "CRITICAL: UpdateRule: failed to retire old-domain cert job after migration commit failure for caddy_id=%s: %v", caddyID, retireErr)
-							recordAudit(c, "写入失败", "证书任务", services.FormatAuditDetail(
-								services.AuditRulePart(caddyID),
-								fmt.Sprintf("域名迁移提交失败后旧域任务退役失败：%v。旧域任务保持原状，请人工检查", retireErr),
-							))
-						}
+						retireOldDomainCertJobOrAudit(c, caddyID, existingRule, "域名迁移 commit 失败", "migration commit failure", "域名迁移提交失败后旧域任务退役失败")
 					}
 				}
 			}
@@ -2500,6 +2493,13 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 			return
 		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "校验源规则 ACME 引用失败: " + err.Error()})
+		return
+	}
+
+	// LBH-A-1（第 70 轮 P2）：源行启用上游池混布同检——保存门只拦新建/更新
+	// 载荷，复制是对存量混布行（69 轮修复前落库/直改 DB）的旁路放大通道。
+	if err := mixedUpstreamPoolError(rule); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "源规则配置不合法：" + err.Error()})
 		return
 	}
 

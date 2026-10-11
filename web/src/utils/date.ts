@@ -97,6 +97,14 @@ export const formatDateShort = (date: unknown): string => {
   return ''
 }
 
+// FE-70-5（第 70 轮）：DB 墙钟串（"YYYY-MM-DD HH:mm:ss"，UTC 存储）→ epoch ms。
+// 必须经 parseDateValue 的 +Z 规范化——裸 new Date 对空格分隔格式在 Safari 返回
+// NaN（排序比较恒为 0 退化）；解析失败返回 null，调用方自行兜底。
+export const parseDbTimeMs = (date: unknown): number | null => {
+  const d = parseDateValue(date)
+  return d ? d.getTime() : null
+}
+
 // Dashboard 图表轴标签（HH:mm:ss），经 tzFormatter 受保护入口（BUG-01）：
 // 非法配置时区回退 DEFAULT_TZ，不再在 ECharts computed 中抛 RangeError。
 export const formatChartTimeInConfigTz = (ms: number): string => {

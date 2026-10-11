@@ -1197,7 +1197,7 @@ func TestCAQueue_prepareExecution_scales_budget_with_domain_count(t *testing.T) 
 	execution, ok := queue.prepareExecutionLocked(context.Background())
 	queue.mu.Unlock()
 
-	// Then：预算按 30min 基础 + 每增加一个域名 10min 缩放
+	// Then：预算按 30min 基础 + 每增加一个域名 15min 缩放（CERT-B 第 70 轮）
 	if !ok {
 		t.Fatal("pending job was not prepared")
 	}
@@ -1206,7 +1206,7 @@ func TestCAQueue_prepareExecution_scales_budget_with_domain_count(t *testing.T) 
 	if !hasDeadline {
 		t.Fatal("execution context has no deadline")
 	}
-	want := caExecutionTimeout + 10*time.Minute
+	want := caExecutionTimeout + 15*time.Minute
 	if remaining := time.Until(deadline); remaining < want-time.Minute || remaining > want {
 		t.Fatalf("execution timeout=%v, want ~%v", remaining, want)
 	}
@@ -1237,15 +1237,17 @@ func TestCAQueue_prepareExecution_budget_capped_at_max(t *testing.T) {
 }
 
 func TestCaExecutionTimeoutFor_counts_domains(t *testing.T) {
-	// Given/When/Then
+	// Given/When/Then（CERT-B 第 70 轮：每域增量 10min→15min——单域内部分段
+	// 最坏 ≈17min（传播 5m+递归 2m/域+验证 10m），15min 贴合最坏段和）
 	testCases := []struct {
 		domains string
 		want    time.Duration
 	}{
 		{domains: "example.com", want: caExecutionTimeout},
-		{domains: "example.com,www.example.com", want: caExecutionTimeout + 10*time.Minute},
-		{domains: " example.com , www.example.com ", want: caExecutionTimeout + 10*time.Minute},
+		{domains: "example.com,www.example.com", want: caExecutionTimeout + 15*time.Minute},
+		{domains: " example.com , www.example.com ", want: caExecutionTimeout + 15*time.Minute},
 		{domains: "", want: caExecutionTimeout},
+		{domains: "a.com,b.com,c.com", want: caExecutionTimeoutMax},
 		{domains: "a.com,b.com,c.com,d.com", want: caExecutionTimeoutMax},
 	}
 	for _, testCase := range testCases {

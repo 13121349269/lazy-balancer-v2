@@ -96,60 +96,12 @@ func expandPolicyIPRefs(p *models.SecurityPolicy, listsByID map[int64][]string) 
 	return exp
 }
 
-// loadIPListEntries 在给定 store 上以一次（或分块）查询取回 id → 条目值列表
-// 映射：只解析 entries 的 value，remark 不参与生成；行缺失（悬空引用）与
-// entries 畸形行跳过——与自定义规则悬空引用仅留痕口径一致。
-// loadIPListEntries 与 loadIPListEntriesVia 是有意双实现(F64-P5 声明):
-// 前者供降级路径(渲染容忍缺失列表),后者供严格校验(refs 必须全部存在)。
-// 错误通道语义不同是设计意图,非冗余——合并需逐调用方审计错误处理链。
-func loadIPListEntries(store caddyConfigStore, ids []int64) map[int64][]string {
-	if len(ids) == 0 || store == nil {
-		return nil
-	}
-	listsByID := make(map[int64][]string, len(ids))
-	for start := 0; start < len(ids); start += ipListChunkSize {
-		end := start + ipListChunkSize
-		if end > len(ids) {
-			end = len(ids)
-		}
-		chunk := ids[start:end]
-		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(chunk)), ",")
-		args := make([]interface{}, len(chunk))
-		for i, id := range chunk {
-			args[i] = id
-		}
-		rows, err := store.Query("SELECT id, COALESCE(entries,'[]') FROM security_ip_lists WHERE id IN ("+placeholders+")", args...)
-		if err != nil {
-			Logf("warn", "加载 IP 地址列表分块查询失败（id 段 %d-%d）: %v", chunk[0], chunk[len(chunk)-1], err)
-			continue
-		}
-		for rows.Next() {
-			var id int64
-			var entriesJSON string
-			if err := rows.Scan(&id, &entriesJSON); err != nil {
-				continue
-			}
-			var entries []models.IPListEntry
-			if err := json.Unmarshal([]byte(entriesJSON), &entries); err != nil {
-				continue
-			}
-			values := make([]string, 0, len(entries))
-			for _, entry := range entries {
-				if entry.Value != "" {
-					values = append(values, entry.Value)
-				}
-			}
-			listsByID[id] = values
-		}
-		rows.Close()
-	}
-	return listsByID
-}
-
 // LoadIPListEntriesByID 以一次查询批量加载 IP 地址列表条目值（仅 value）。
 // ids 为空或数据库未初始化时返回空映射；缺失的 id 不出现在结果中。
-// loadIPListEntriesVia：store 感知装载（审计 U1-F3）——store 非-nil（v2 导入
-// 事务视图）经其查询，nil 回退 db.DB。镜像 resolvePolicyIPListRefs 的回退逻辑。
+// loadIPListEntriesVia：唯一装载实现（F64-P5 曾声明与 loadIPListEntries 双实现，
+// 后者零调用已删——第 70 轮 SEC-A-1；渲染与严格校验统一走 Via 错误通道）。
+// store 感知装载（审计 U1-F3）——store 非-nil（v2 导入事务视图）经其查询，
+// nil 回退 db.DB。镜像 resolvePolicyIPListRefs 的回退逻辑。
 func loadIPListEntriesVia(store caddyConfigStore, ids []int64) (map[int64][]string, map[int64]bool, error) {
 	if store == nil {
 		m, err := LoadIPListEntriesByID(ids)
