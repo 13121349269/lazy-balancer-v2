@@ -70,7 +70,7 @@ type Descriptor struct {
 **Daemon 角色门（2026-10-01 追加）**：StartLoop 仅在 roleAllows 时启动 Run；
 SetRole（promote/demote）自动拉起/停止角色不符的 daemon（loopEnabled 保留——
 再 promote 自动恢复）。显示用实际运行态（TaskMeta.Running）：Run 存活=运行中；
-调度开但角色不符=空闲；调度关=已停止。
+调度开但角色不符=空闲；调度关=空闲（方案 A，2026-10-12：状态列只承载执行语义，调度语义归开关列）。
 
 **Daemon 启动计数（2026-10-01 用户裁定）**：启动即记 success 1 行（启动是既成
 事实——成功列体现启动计数）；异常退出（Run 返回错误且非 ctx 取消）补记
@@ -106,7 +106,7 @@ failed 行（真实时长与错误）；取消/正常停止不增行。
 ## 3. cert-waiting-ca 特例（默认关闭 + 唤醒/自停）
 
 ```
-默认：调度关闭（不在默认 StartLoop 清单）——引擎不 tick，页面显示「已停止」
+默认：调度关闭（不在默认 StartLoop 清单）——引擎不 tick，页面状态列「空闲」+开关列「已暂停」（方案 A，2026-10-12）
 唤醒（U1-66-05 勘误：非单点——四处入队成功路径各自唤醒）：
       cert-renewal-scan Run 体入队后 certJobsActive → StartLoop
       CreateOrRequeueCertJobWithChange 成功路径（规则写路径 Create/Retry/Renew 收敛点）
@@ -136,7 +136,7 @@ failed 行（真实时长与错误）；取消/正常停止不增行。
 
 四个定时任务的**业务开关**（安全设置页的 threat/CRS/IP2Region 自动更新、备份设置页的自动备份启用）与任务监控联动：
 
-- EnabledFn（DB 直读）暴露业务开关态 → 视图 `enabled=false` 且 status=**已暂停**（非「空闲」）
+- EnabledFn（DB 直读）暴露业务开关态 → 视图 `enabled=false`（方案 A，2026-10-12：状态列=空闲，开关列并判 loop_on&&enabled 显示「已暂停」；cert-waiting-ca 的 StatusFn stopped 借用同轮废除）
 - NextSlotFn 同源判断——业务关=零调度零下次执行
 - 引擎调度开关（loop_on）与业务开关两层独立：调度开关暂停=引擎不投递；业务开关关闭=无排程槽可投递
 
