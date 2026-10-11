@@ -4,7 +4,7 @@ package services
 // 配置生成类修复的验证终点是「引擎接受」——字符串形状断言不构成行为验证
 // (coraza「disruptive 动作仅允许链首段」约束在文本层不可见,坏形状曾随
 // v2.2.11 出厂)。本文件的测试把 BuildCorazaDirectives/buildIPPrecheckDirectives
-// 的真实渲染产物直接送入 coraza v3.7.0(与 Dockerfile coraza-caddy v2.6.1
+// 的真实渲染产物直接送入 coraza v3.8.1(与 Dockerfile coraza-caddy v2.6.2
 // 同版)编译——编译拒绝即测试失败,字符串测试无法覆盖的引擎约束在此拦截。
 
 import (
@@ -110,7 +110,7 @@ func TestEngineGate_customRuleIDCollisionSkipped(t *testing.T) {
 }
 
 // 阶段化模型（GeoIP 迁入预检）：预检含逐策略 GeoIP 链（链首 deny+skipAfter+
-// chain、X-LB-GeoIP-Loc 续段、信任续段）的新形状必须被 coraza v3.7.0 接受——
+// chain、X-LB-GeoIP-Loc 续段、信任续段）的新形状必须被 coraza v3.8.1 接受——
 // 「disruptive 动作仅允许链首段」约束只经编译可见（R-10）。
 func TestEngineGate_precheckGeoipChainShapes(t *testing.T) {
 	p1 := &models.SecurityPolicy{
@@ -128,7 +128,7 @@ func TestEngineGate_precheckGeoipChainShapes(t *testing.T) {
 }
 
 // SEC41-3（第 41 轮审计）：引擎门禁覆盖此前未送编译的六个发射形状。每个
-// 用例的断言=真实渲染产物被 coraza v3.7.0 NewWAF 接受（R-10 天然满足——
+// 用例的断言=真实渲染产物被 coraza v3.8.1 NewWAF 接受（R-10 天然满足——
 // 与既有门禁同一 compileForEngineGate 通道）。
 func TestEngineGate_modeAndControlShapes(t *testing.T) {
 	// ① detection 的 id:6 DetectionOnly 切换行
