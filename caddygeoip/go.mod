@@ -3,7 +3,7 @@ module lazy-balancer-v2/caddygeoip
 go 1.26.0
 
 require (
-	github.com/caddyserver/caddy/v2 v2.11.6
+	github.com/caddyserver/caddy/v2 v2.11.7
 	github.com/corazawaf/coraza/v3 v3.7.0
 	github.com/lionsoul2014/ip2region/binding/golang v0.0.0-20260810050043-e05f0cb75ffd
 	github.com/prometheus/client_golang v1.24.1
@@ -16,6 +16,7 @@ require (
 	github.com/bits-and-blooms/bitset v1.25.0 // indirect
 	github.com/corazawaf/libinjection-go v0.3.2 // indirect
 	github.com/dunglas/go-urlpattern v1.0.0 // indirect
+	github.com/dunglas/httpsfv v1.1.1 // indirect
 	github.com/goccy/go-json v0.10.5 // indirect
 	github.com/goccy/go-yaml v1.18.0 // indirect
 	github.com/gotnospirit/makeplural v0.0.0-20180622080156-a5f48d94d976 // indirect

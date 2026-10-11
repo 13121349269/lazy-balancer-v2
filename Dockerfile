@@ -27,7 +27,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
   set -e; \
   built=0; \
   for attempt in 1 2 3; do \
-    if xcaddy build v2.11.6 \
+    if xcaddy build v2.11.7 \
       --with github.com/mholt/caddy-l4@v0.1.2 \
       --with github.com/caddyserver/transform-encoder@ba4124974830222da7f12a091cf11ddf4d49363f \
       --with github.com/mholt/caddy-ratelimit@v0.1.0 \
@@ -44,7 +44,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
   [ -f /app/caddy ] || { echo ">>> 构建成功但 /app/caddy 未生成" >&2; exit 1; }
 # 构建期断言：镜像扫描要求的最低依赖版本未被 MVS 抬升到位则直接失败
 # （版本下限：grpc>=v1.83.2、otel>=v1.45、x/net>=v0.58、x/crypto>=v0.56；
-#  cel-go v2.11.6 起随上游 v0.29.2（celmatcher 已适配）；caddydeps 钉同版防传递抬偏，见
+#  cel-go v2.11.7 起随上游 v0.29.2（celmatcher 已适配）；caddydeps 钉同版防传递抬偏，见
 #  caddydeps/go.mod 注释；go version -m 各列以 TAB 分隔，用 awk 的 ge()
 #  做逐段数值化语义比较，不设上限，依赖升到大版本也不会误报。
 #  ge() 的局部变量必须以多余形参声明，否则会覆盖主循环的 i 导致漏检；
