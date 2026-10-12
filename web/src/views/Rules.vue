@@ -2014,21 +2014,23 @@ const userExplicitPort = ref(false)
 let preTcpSnapshot: { listenPort: number; enableTls: boolean } | null = null
 
 // Watch for enable_tls toggle to adjust default listen port
+// R10-2（第 72 轮，用户裁定）：启用 TLS 时端口直接默认 443（不仅是提示）——
+// 编辑态与创建态统一；用户随后手动改端口即置 userExplicitPort 停止后续联动。
+// 关闭方向（1→0）维持既有行为未裁定不动。
 watch(() => wizardForm.enable_tls, (newVal, oldVal) => {
   if (hydratingWizard) return
-  // 编辑态下端口不做自动迁移（保留已提交配置），但 TLS 开关与非常态端口组合时给出非静默提示
-  if (newVal && !oldVal && userExplicitPort.value && wizardForm.listen_port === 80) {
-    showTlsHint('端口当前为 80，如需 HTTPS 访问建议改为 443')
-  }
   if (!newVal && oldVal && userExplicitPort.value && wizardForm.listen_port === 443) {
     showTlsHint('端口当前为 443，关闭 TLS 后如需 HTTP 访问建议改为 80')
   }
   if (userExplicitPort.value) return
   if (wizardForm.protocol !== 'http') return
   if (newVal && !oldVal) {
-    // Enabling HTTPS: default to 443 if currently using the HTTP default 80
-    if (wizardForm.listen_port === 80) {
+    // Enabling HTTPS: default the port to 443 unconditionally (user ruling:
+    // direct default, not just a hint). A follow-up manual change re-arms
+    // userExplicitPort and stops further auto-sync.
+    if (wizardForm.listen_port !== 443) {
       wizardForm.listen_port = 443
+      showTlsHint('已默认切换为 443 端口')
     }
   } else if (!newVal && oldVal) {
     // Disabling HTTPS: revert to 80 if currently 443

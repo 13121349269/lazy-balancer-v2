@@ -385,13 +385,8 @@ func terminalAuthorizationError(status string, authorizationErr error, challenge
 // validation can be diagnosed: every miss logs the expected value and the
 // values actually returned by the resolver.
 func (i *Issuer) waitForDNS(ctx context.Context, fqdn, expected string, timeout time.Duration) error {
-	// Order matters: China-friendly resolvers first, then global ones.
-	resolvers := []string{
-		"223.5.5.5:53",    // Alibaba AliDNS
-		"119.29.29.29:53", // Tencent DNSPod
-		"8.8.8.8:53",      // Google Public DNS
-		"1.1.1.1:53",      // Cloudflare
-	}
+	// propagationRecursiveResolvers 见下方接缝声明。
+	resolvers := propagationRecursiveResolvers
 
 	log := func(format string, args ...any) {
 		if i.Logger != nil {
@@ -407,16 +402,21 @@ func (i *Issuer) waitForDNS(ctx context.Context, fqdn, expected string, timeout 
 	// The CA validates against authoritative name servers, so probe them
 	// directly: it is the strongest signal and usually much faster than
 	// waiting for recursive resolvers' caches to expire.
-	authServers := resolveAuthoritativeNS(ctx, fqdn, resolvers[0])
+	authServers := resolveAuthoritativeNSFn(ctx, fqdn, resolvers[0])
+	initialAuthServers := append([]string(nil), authServers...)
 	if len(authServers) > 0 {
 		log("权威 DNS 服务器: %s", strings.Join(authServers, ", "))
 	}
 
-	ticker := time.NewTicker(3 * time.Second)
+	ticker := time.NewTicker(propagationPollInterval)
 	defer ticker.Stop()
 
 	var lastFound []string
 	var lastResolver string
+	var lastRecursiveHits []string
+	consensusRounds := 0
+	firstProbeAt := time.Now()
+	divergenceDiagnosed := false
 
 	for {
 		// Authoritative name servers first: every reachable server must have
@@ -435,42 +435,103 @@ func (i *Issuer) waitForDNS(ctx context.Context, fqdn, expected string, timeout 
 			return nil
 		}
 
-		// 审计 M9：递归兜底仅在权威存活列表为空（本轮 probeAuthServers 后已无
-		// 任何可达权威）时执行；列表非空时成功只认 authReady——公共递归缓存可能
-		// 取自已更新的单台 NS，CA 恰好询问滞后 NS 时挑战仍会失败并白烧配额
-		// （LE 5 次/时），不得作为放行依据。
-		if len(authServers) == 0 {
-			// Fallback: public recursive resolvers (slower due to caching).
-			for _, resolver := range resolvers {
-				hit, found, err := probeTXT(ctx, resolver, fqdn, expected, true)
-				if err != nil {
-					log("查询失败 %s @ %s: %v", fqdn, resolver, err)
-					continue
-				}
-				if hit {
-					log("DNS 已命中 %s @ %s, 值: %s", fqdn, resolver, expected)
-					return nil
-				}
-				if len(found) > 0 {
-					lastFound = found
-					lastResolver = resolver
-					log("DNS 未命中 %s @ %s, 期望: %s, 实际: %s", fqdn, resolver, expected, strings.Join(found, "; "))
-				}
+		// W1（第 72 轮，用户裁定）：每轮并行于权威探测公共递归做共识统计。
+		// 放行判据二选一：①authReady（上）；②≥MinHits 台递归命中当前期望值
+		// ×连续 MinRounds 轮。权威全 miss 而递归命中的三形态（CNAME 委托/
+		// NS 变更/权威集群分裂）LE 验证均能跟随实际 DNS 状态成功，客户端
+		// 死等权威即恒超时；单台缓存超前（M9）由「多台共识×连续两轮」对冲。
+		var recursiveHits []string
+		for _, resolver := range resolvers {
+			hit, found, err := probeTXT(ctx, resolver, fqdn, expected, true)
+			if err != nil {
+				log("查询失败 %s @ %s: %v", fqdn, resolver, err)
+				continue
 			}
+			if hit {
+				recursiveHits = append(recursiveHits, resolver)
+				continue
+			}
+			if len(found) > 0 {
+				lastFound = found
+				lastResolver = resolver
+				log("DNS 未命中 %s @ %s, 期望: %s, 实际: %s", fqdn, resolver, expected, strings.Join(found, "; "))
+			}
+		}
+		lastRecursiveHits = recursiveHits
+		if len(recursiveHits) >= propagationConsensusMinHits {
+			consensusRounds++
+			if consensusRounds >= propagationConsensusMinRounds {
+				log("递归共识放行 %s @ %s（权威未见记录，放行依据=公共递归多台共识，详见诊断日志）",
+					fqdn, strings.Join(recursiveHits, ", "))
+				return nil
+			}
+		} else {
+			consensusRounds = 0
+		}
+
+		// 现行兜底保留：权威存活列表为空（全部下线/解析失败）时单台递归命中
+		// 即放行——此时无权威可问，递归是唯一信号（审计 M9 场景语义不变）。
+		if len(authServers) == 0 && len(recursiveHits) > 0 {
+			log("DNS 已命中 %s @ %s, 值: %s", fqdn, recursiveHits[0], expected)
+			return nil
+		}
+
+		// W2（第 72 轮）：权威存活台全 miss 持续超阈值且递归未达共识——显式
+		// 诊断一次（生产排障 30 秒自明根因，不再盲猜）。
+		if !divergenceDiagnosed && len(authServers) > 0 &&
+			time.Since(firstProbeAt) > propagationDivergenceDiagAfter {
+			divergenceDiagnosed = true
+			log("诊断: 权威与递归结果分歧已持续 %s——权威存活台(%s)全 miss，递归命中台(%s)；"+
+				"疑似 CNAME 委托（_acme-challenge 下挂 CNAME）/NS 变更未收敛/权威集群分裂，可 nslookup -type=CNAME 核验",
+				time.Since(firstProbeAt).Round(time.Second),
+				strings.Join(authServers, ","), orNone(lastRecursiveHits))
 		}
 
 		select {
 		case <-ctx.Done():
 			if len(lastFound) > 0 {
-				return fmt.Errorf("dns propagation timeout for %s: expected %s, last found %s (via %s)",
-					fqdn, expected, strings.Join(lastFound, "; "), lastResolver)
+				return fmt.Errorf("dns propagation timeout for %s: expected %s, last found %s (via %s); authoritative=%s recursive=%s(命中:%s)",
+					fqdn, expected, strings.Join(lastFound, "; "), lastResolver,
+					orNone(initialAuthServers), strings.Join(resolvers, ","), orNone(lastRecursiveHits))
 			}
-			return fmt.Errorf("dns propagation timeout for %s: expected %s, no TXT record found from any resolver",
-				fqdn, expected)
+			return fmt.Errorf("dns propagation timeout for %s: expected %s, no TXT record found from any resolver; authoritative=%s recursive=%s(命中:%s)",
+				fqdn, expected, orNone(initialAuthServers), strings.Join(resolvers, ","), orNone(lastRecursiveHits))
 		case <-ticker.C:
 		}
 	}
 }
+
+// orNone 空切片显示占位（W2 诊断/超时清单用）。
+func orNone(list []string) string {
+	if len(list) == 0 {
+		return "(无)"
+	}
+	return strings.Join(list, ",")
+}
+
+// W1/W2（第 72 轮，用户裁定）：waitForDNS 测试接缝（镜像 recursiveDNS* 先例：
+// var 而非 const，测试按比例缩放预算保持墙钟快速，生产代码不得改写）。
+var (
+	// resolveAuthoritativeNSFn 权威 NS 解析入口（测试替换为固定假权威清单）。
+	resolveAuthoritativeNSFn = resolveAuthoritativeNS
+	// propagationRecursiveResolvers waitForDNS 共识统计的公共递归清单
+	// （中国友好解析器在前）。
+	propagationRecursiveResolvers = []string{
+		"223.5.5.5:53",    // Alibaba AliDNS
+		"119.29.29.29:53", // Tencent DNSPod
+		"8.8.8.8:53",      // Google Public DNS
+		"1.1.1.1:53",      // Cloudflare
+	}
+	// propagationPollInterval 探测轮询间隔（生产 3s）。
+	propagationPollInterval = 3 * time.Second
+	// propagationDivergenceDiagAfter 权威/递归分歧诊断日志阈值（生产 30s）。
+	propagationDivergenceDiagAfter = 30 * time.Second
+	// 递归共识放行阈值：≥MinHits 台递归命中当前值 × 连续 MinRounds 轮。
+	// 两者下限=2 由 TestPropagationConsensusDefaults 钉死（M9：单台缓存超前
+	// 不得单轮放行）。
+	propagationConsensusMinHits   = 2
+	propagationConsensusMinRounds = 2
+)
 
 // recursiveDNSResolvers / recursiveDNSPollInterval / recursiveDNSDeadline 是
 // checkRecursiveDNS 的测试接缝（var 而非 const，镜像 finalizeTimeout /

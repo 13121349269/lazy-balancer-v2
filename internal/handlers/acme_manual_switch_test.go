@@ -62,8 +62,9 @@ func putUpdateRule(t *testing.T, h interface{}, caddyID, body string) *httptest.
 	return response
 }
 
-// 主形状：acme→manual 切换携带 queued 任务——必须 200，任务行收敛为终态
-// disabled（30s 补扫不复活），acme_config_id 清零。
+// 主形状：acme→manual 切换携带 queued 任务——必须 200，任务行**直接删除**
+// （R10 第 72 轮用户裁定：脱离 ACME 即删任务，取代 L4-66-01 的「翻终态
+// disabled」——30s 补扫对象已不存在），acme_config_id 清零。
 func TestUpdateRule_acmeToManual_convergesNonTerminalCertJobs(t *testing.T) {
 	// Given
 	oldCertDir := testServicesCertDir
@@ -87,12 +88,12 @@ func TestUpdateRule_acmeToManual_convergesNonTerminalCertJobs(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("switch status=%d body=%s, want 200（非终态任务必须在事务内收敛，不得 409 死锁）", response.Code, response.Body.String())
 	}
-	var status string
-	if err := db.DB.QueryRow("SELECT status FROM cert_jobs WHERE id=?", jobID).Scan(&status); err != nil {
-		t.Fatalf("read cert job: %v", err)
+	var remaining int
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM cert_jobs WHERE id=?", jobID).Scan(&remaining); err != nil {
+		t.Fatalf("count cert job: %v", err)
 	}
-	if status != "disabled" {
-		t.Fatalf("cert job %d status=%q, want disabled（切换必须收敛非终态任务，防 30s 补扫复活重签）", jobID, status)
+	if remaining != 0 {
+		t.Fatalf("cert job %d still present（切换必须删除任务行，防 30s 补扫复活重签）", jobID)
 	}
 	var tlsSource string
 	var acmeConfigID int64

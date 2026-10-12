@@ -1857,17 +1857,28 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	// 放行、30s 补扫（requeueStrandedQueuedJobs/requeueWaitingCAJobs）不再复活
 	// 该行。事务回滚（应用失败）时翻转一并撤销，队列仍持有任务，语义一致。
 	var switchedCertJobs int64
-	if switchingFromACME {
-		flipResult, flipErr := tx.Exec("UPDATE cert_jobs SET status='disabled', message='规则证书源已切换为手动，任务已取消', updated_at=datetime('now') WHERE rule_id=? AND status NOT IN ('failed','disabled')", caddyID)
-		if flipErr != nil {
-			services.Logf("error", "UpdateRule cert job flip error for caddy_id=%s: %v", caddyID, flipErr)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新证书任务状态失败: " + flipErr.Error()})
+	delReason := ""
+	// R10（第 72 轮，用户裁定）：规则脱离 ACME（改手动/禁用 TLS）时直接删除
+	// 该规则全部 cert_jobs（含 failed/issued）——取代 L4-66-01 的「非终态翻
+	// disabled、failed 保留」：失败行残留任务列表且重签按钮误导（实际恒 409），
+	// 禁用 TLS 路径此前完全无处理。删除在 tx 内（应用失败随事务回滚），提交
+	// 后仍取消队列在途签发（下方 cancelRuleJobs——行已删仍需防 worker 僵尸执行）。
+	disableTLS := existingRule.EnableTLS && req.EnableTLS != nil && !*req.EnableTLS
+	if switchingFromACME || disableTLS {
+		delReason = "规则证书源已切换为手动，证书任务已删除"
+		if disableTLS && !switchingFromACME {
+			delReason = "规则已禁用 TLS，证书任务已删除"
+		}
+		delResult, delErr := tx.Exec("DELETE FROM cert_jobs WHERE rule_id=?", caddyID)
+		if delErr != nil {
+			services.Logf("error", "UpdateRule cert job delete error for caddy_id=%s: %v", caddyID, delErr)
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "删除证书任务失败: " + delErr.Error()})
 			return
 		}
-		switchedCertJobs, flipErr = flipResult.RowsAffected()
-		if flipErr != nil {
-			services.Logf("error", "UpdateRule cert job flip RowsAffected error for caddy_id=%s: %v", caddyID, flipErr)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "确认证书任务状态失败: " + flipErr.Error()})
+		switchedCertJobs, delErr = delResult.RowsAffected()
+		if delErr != nil {
+			services.Logf("error", "UpdateRule cert job delete RowsAffected error for caddy_id=%s: %v", caddyID, delErr)
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "确认证书任务删除结果失败: " + delErr.Error()})
 			return
 		}
 	}
@@ -1955,18 +1966,19 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	}
 	committed = true
 
-	// L4-66-01：acme→manual 切换第二步——提交成功后留痕并取消队列在途签发
-	// （DisableRule 同序：先翻终态后取消）。有界等待；失败仅告警继续——规则
-	// 切换本身已提交，任务行已终态，队列残留由取消的 best-effort 收敛。
-	if switchingFromACME {
+	// L4-66-01/R10：规则脱离 ACME（改手动/禁用 TLS）第二步——提交成功后留痕
+	// 并取消队列在途签发（DisableRule 同序：先收敛任务行后取消）。有界等待；
+	// 失败仅告警继续——规则切换本身已提交，任务行已删除，队列残留由取消的
+	// best-effort 收敛。
+	if switchingFromACME || disableTLS {
 		if switchedCertJobs > 0 {
-			services.WriteCertJobLogByRule(caddyID, "WARN", "cancelled", "规则证书源已切换为手动，证书任务已取消")
-			recordAudit(c, "更新", "证书任务", fmt.Sprintf("规则 %s 证书源已切换为手动，%d 个证书任务状态设为已取消", caddyID, switchedCertJobs))
+			services.WriteCertJobLogByRule(caddyID, "WARN", "cancelled", delReason)
+			recordAudit(c, "更新", "证书任务", fmt.Sprintf("规则 %s %s（%d 个）", caddyID, delReason, switchedCertJobs))
 		}
 		if qm := services.GetCAQueueManager(); qm != nil {
 			cancelCtx, cancel := context.WithTimeout(c.Request.Context(), cancelRuleJobsTimeout)
 			if err := cancelRuleJobs(cancelCtx, qm, caddyID); err != nil {
-				services.Logf("warn", "UpdateRule acme→manual: cancel cert jobs for %s failed: %v (continuing)", caddyID, err)
+				services.Logf("warn", "UpdateRule cert job cancel for %s failed: %v (continuing)", caddyID, err)
 			}
 			cancel()
 		}
