@@ -615,9 +615,9 @@
             <template v-if="wizardForm.protocol === 'http'">
               <el-divider content-position="left" class="compact-divider">NTLM 兼容</el-divider>
 
-              <el-form-item label="NTLM 兼容">
-                <div class="ntlm-switch-control">
-                  <el-switch :model-value="ntlmOn" @change="onNtlmToggle" />
+              <el-form-item>
+                <template #label>
+                  <span>NTLM 兼容</span>
                   <el-tooltip placement="top" popper-class="ntlm-help-popper">
                     <template #content>
                       <div class="ntlm-help-line">适用场景：Exchange / AD / 旧版 IIS 等使用 NTLM / 协商认证的后端</div>
@@ -625,8 +625,11 @@
                       <div class="ntlm-help-line">· 若后端协商到 Kerberos，建议不改写 Host</div>
                       <div class="ntlm-help-line">· 入口 HTTP/2 由客户端自动降级，不受本开关控制</div>
                     </template>
-                    <el-icon class="ntlm-help-icon"><WarningFilled /></el-icon>
+                    <el-icon class="upstream-unknown"><QuestionFilled /></el-icon>
                   </el-tooltip>
+                </template>
+                <div class="ntlm-switch-control">
+                  <el-switch :model-value="ntlmOn" @change="onNtlmToggle" />
                   <span class="form-tip-inline">为 NTLM / 协商认证后端锁定长连接亲和的代理形态</span>
                 </div>
               </el-form-item>
@@ -815,9 +818,12 @@
               <span class="form-tip-inline">MB，0 = 全局默认；限制单个请求体的最大大小</span>
             </el-form-item>
 
-            <el-form-item label="Keepalive 超时">
+            <el-form-item>
+              <template #label>
+                <span>Keepalive 超时</span>
+                <span v-if="ntlmOn" class="ntlm-takeover-badge ntlm-takeover-badge-label">NTLM 接管</span>
+              </template>
               <el-input-number v-model="wizardForm.upstream_keepalive_timeout" :min="0" :max="3600" controls-position="right" style="width: 120px;" :disabled="ntlmOn" />
-              <span v-if="ntlmOn" class="ntlm-takeover-badge">NTLM 接管</span>
               <span class="form-tip-inline">秒，0 = 全局默认；与上游服务器长连接的空闲超时</span>
             </el-form-item>
           </el-form>
@@ -2585,9 +2591,26 @@ const onNtlmToggle = async (enabled: string | number | boolean): Promise<void> =
   if (Boolean(enabled)) {
     try {
       await ElMessageBox.confirm(
-        `<div style="line-height:1.9">开启后将接管以下配置：<br/>① 负载策略锁定为 Cookie 会话保持<br/>② 禁用请求重试<br/>③ 响应立即透传<br/>④ 上游连接保持 300s + 强制 HTTP/1.1<br/>⑤ 主动健康检查关闭（NTLM 后端探测返回 401 会被误判摘除；被动健康检查仍在役）<br/><strong>原配置不保留记忆，关闭时恢复默认</strong></div>`,
-        '开启 NTLM 兼容',
-        { type: 'warning', dangerouslyUseHTMLString: true, confirmButtonText: '开启', cancelButtonText: '取消' }
+        `<div class="ntlm-msg">
+          <div class="ntlm-msg-head">
+            <svg class="ntlm-msg-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 8v5m0 3v.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/></svg>
+            <div>
+              <div class="ntlm-msg-title">开启 NTLM 兼容</div>
+              <div class="ntlm-msg-sub">为 NTLM / 协商认证后端锁定长连接亲和的代理形态</div>
+            </div>
+          </div>
+          <div class="ntlm-msg-caption">开启后将接管以下配置：</div>
+          <ul class="ntlm-msg-list">
+            <li>负载策略锁定为 <b>Cookie 会话保持</b></li>
+            <li>禁用请求重试</li>
+            <li>响应立即透传</li>
+            <li>上游连接保持 300s + 强制 HTTP/1.1</li>
+            <li>主动健康检查关闭<span class="ntlm-msg-note">（探测返回 401 会被误判摘除；被动健康检查仍在役）</span></li>
+          </ul>
+          <div class="ntlm-msg-foot">原配置不保留记忆，关闭时恢复默认</div>
+        </div>`,
+        '',
+        { dangerouslyUseHTMLString: true, confirmButtonText: '开启', cancelButtonText: '取消', customClass: 'ntlm-msg-box', type: null as unknown as undefined }
       )
     } catch {
       return // 取消：开关由 model-value 驱动自动回弹，不改动任何字段
@@ -2598,9 +2621,23 @@ const onNtlmToggle = async (enabled: string | number | boolean): Promise<void> =
     wizardForm.ntlm_compatible = 0
     restoreNtlmDefaults()
     await ElMessageBox.alert(
-      '已恢复默认配置：策略解锁为轮询、重试窗口 5s 默认、透传/Keepalive/HTTP1 恢复全局继承、主动健康检查关闭',
-      'NTLM 兼容已关闭',
-      { type: 'info', confirmButtonText: '知道了' }
+      `<div class="ntlm-msg">
+        <div class="ntlm-msg-head">
+          <svg class="ntlm-msg-icon ntlm-msg-icon-ok" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m5 13 4 4L19 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <div>
+            <div class="ntlm-msg-title">NTLM 兼容已关闭</div>
+            <div class="ntlm-msg-sub">已恢复默认配置</div>
+          </div>
+        </div>
+        <ul class="ntlm-msg-list">
+          <li>负载策略解锁为轮询</li>
+          <li>重试窗口恢复 5s 默认</li>
+          <li>透传 / Keepalive / HTTP 版本恢复全局继承</li>
+          <li>主动健康检查保持关闭，可按需重新开启</li>
+        </ul>
+      </div>`,
+      '',
+      { dangerouslyUseHTMLString: true, confirmButtonText: '知道了', customClass: 'ntlm-msg-box' }
     )
   }
 }
@@ -4040,6 +4077,12 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 
+/* label 侧接管徽标（Keepalive）：跟随标题行，不挤入 tip 文本流 */
+.ntlm-takeover-badge-label {
+  margin-left: 6px;
+  vertical-align: 1px;
+}
+
 .active-check-control {
   display: flex;
   align-items: center;
@@ -4219,4 +4262,19 @@ onUnmounted(() => {
 /* NTLM 帮助 tooltip：popper 挂 body，须非 scoped */
 .ntlm-help-popper { max-width: 360px; }
 .ntlm-help-popper .ntlm-help-line { font-size: 12px; line-height: 1.7; }
+.ntlm-msg-box { max-width: 480px; }
+.ntlm-msg-box .el-message-box__header { display: none; }
+.ntlm-msg-box .el-message-box__container { align-items: flex-start; }
+.ntlm-msg-box .el-message-box__status { display: none; }
+.ntlm-msg-box .el-message-box__message { padding: 4px 6px 0 2px; }
+.ntlm-msg .ntlm-msg-head { display: flex; align-items: flex-start; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--el-border-color-lighter); }
+.ntlm-msg .ntlm-msg-icon { width: 34px; height: 34px; flex: 0 0 auto; padding: 7px; border-radius: 8px; background: var(--el-color-warning-light-9); color: var(--el-color-warning); }
+.ntlm-msg .ntlm-msg-icon-ok { background: var(--el-color-success-light-9); color: var(--el-color-success); }
+.ntlm-msg .ntlm-msg-title { font-size: 15px; font-weight: 600; color: var(--el-text-color-primary); line-height: 22px; }
+.ntlm-msg .ntlm-msg-sub { font-size: 12px; color: var(--el-text-color-secondary); margin-top: 2px; }
+.ntlm-msg .ntlm-msg-caption { font-size: 13px; color: var(--el-text-color-regular); margin: 12px 0 6px; }
+.ntlm-msg .ntlm-msg-list { margin: 0; padding-left: 18px; font-size: 13px; line-height: 2; color: var(--el-text-color-regular); }
+.ntlm-msg .ntlm-msg-list b { color: var(--el-text-color-primary); }
+.ntlm-msg .ntlm-msg-note { color: var(--el-text-color-secondary); font-size: 12px; }
+.ntlm-msg .ntlm-msg-foot { margin-top: 10px; padding: 8px 10px; border-radius: 6px; background: var(--el-fill-color-light); font-size: 12px; color: var(--el-text-color-secondary); }
 </style>
