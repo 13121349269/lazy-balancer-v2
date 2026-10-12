@@ -32,6 +32,7 @@ var configChangeFieldTokens = []string{
 	"mfa_lockout_enabled",
 	"trusted_proxy_enabled",
 	"trusted_proxy_ranges",
+	"trusted_proxy_range_refs",
 	"trusted_proxy_headers",
 	"trusted_proxy_strict",
 	"task_log_size_mb",

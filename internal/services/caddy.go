@@ -13,6 +13,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/exec"
 	"reflect"
@@ -1144,14 +1145,15 @@ func GenerateCaddyConfig(overrides ...*models.UpdateConfigRequest) map[string]in
 // trustedProxyServerFields 渲染受信代理（CDN 真实 IP）的 server 级字段
 // （v2.3.x）：enabled=false 或读错时返回空 map（读错 fail-closed=不注入，
 // 与「未启用」同形——宁可退回 socket IP 也不采信未校验的头）。启用时：
-// trusted_proxies 静态网段 + trusted_proxies_strict（1/0 恒输出）+
-// client_ip_headers（非空才输出，空=仅 X-Forwarded-For）。
-// store 形参保证事务内渲染（ApplyConfigFromTx）读到未提交的设置。
+// trusted_proxies 静态网段（内联 ∪ 引用名单展开，2026-10-12）+
+// trusted_proxies_strict（1/0 恒输出）+ client_ip_headers（非空才输出，
+// 空=仅 X-Forwarded-For）。store 形参保证事务内渲染（ApplyConfigFromTx）
+// 读到未提交的设置与名单。
 func trustedProxyServerFields(store caddyConfigStore) map[string]interface{} {
 	var enabled, strict bool
-	var rangesJSON, headersJSON string
-	if err := store.QueryRow(`SELECT COALESCE(trusted_proxy_enabled,0), COALESCE(trusted_proxy_ranges,'[]'), COALESCE(trusted_proxy_headers,'[]'), COALESCE(trusted_proxy_strict,1) FROM global_config WHERE id = 1`).
-		Scan(&enabled, &rangesJSON, &headersJSON, &strict); err != nil {
+	var rangesJSON, refsJSON, headersJSON string
+	if err := store.QueryRow(`SELECT COALESCE(trusted_proxy_enabled,0), COALESCE(trusted_proxy_ranges,'[]'), COALESCE(trusted_proxy_range_refs,'[]'), COALESCE(trusted_proxy_headers,'[]'), COALESCE(trusted_proxy_strict,1) FROM global_config WHERE id = 1`).
+		Scan(&enabled, &rangesJSON, &refsJSON, &headersJSON, &strict); err != nil {
 		Logf("error", "读取受信代理设置失败（按未启用渲染）: %v", err)
 		return nil
 	}
@@ -1167,10 +1169,15 @@ func trustedProxyServerFields(store caddyConfigStore) map[string]interface{} {
 		Logf("error", "解析受信代理请求头失败（按未启用渲染）: %v", err)
 		return nil
 	}
+	merged, err := expandTrustedProxyRanges(store, ranges, refsJSON)
+	if err != nil {
+		Logf("error", "展开受信代理引用名单失败（按未启用渲染）: %v", err)
+		return nil
+	}
 	fields := map[string]interface{}{
 		"trusted_proxies": map[string]interface{}{
 			"source": "static",
-			"ranges": ranges,
+			"ranges": merged,
 		},
 	}
 	if strict {
@@ -1182,6 +1189,65 @@ func trustedProxyServerFields(store caddyConfigStore) map[string]interface{} {
 		fields["client_ip_headers"] = headers
 	}
 	return fields
+}
+
+// expandTrustedProxyRanges 合并内联网段与引用名单条目（2026-10-12）：
+// refs 按 id 经 loadIPListEntriesVia 装载（system=1 读 .iplist 文件、
+// 自定义读 DB entries——与策略 refs 同一装载通道）；内联在前、引用按
+// refs 出现顺序追加；跨来源按规范前缀去重（裸 IP 补 /32 //128）；逐条
+// 经 CIDR 校验，非法条目跳过并留痕（名单写侧已过 validIPOrCIDR，此处
+// 仅防御带外改库/导入残留）。悬空引用（名单不存在）贡献零条目——保存侧
+// 存在性门与删除守卫保证常规路径不产生；装载失败整体 fail-closed 上抛
+// （调用方按未启用渲染，宁可退回 socket IP）。
+func expandTrustedProxyRanges(store caddyConfigStore, inline []string, refsJSON string) ([]string, error) {
+	refIDs := parseIPListRefs(refsJSON)
+	if strings.TrimSpace(refsJSON) != "" && refIDs == nil {
+		// 非空但解析不出 id：畸形 JSON 或全非整数条目（带外改库形态）。
+		return nil, fmt.Errorf("trusted_proxy_range_refs 畸形: %q", refsJSON)
+	}
+	merged := make([]string, 0, len(inline))
+	seen := make(map[string]struct{}, len(inline))
+	appendCIDR := func(value string) {
+		prefix, err := netip.ParsePrefix(strings.TrimSpace(value))
+		if err != nil {
+			addr, addrErr := netip.ParseAddr(strings.TrimSpace(value))
+			if addrErr != nil {
+				Logf("warn", "受信代理引用条目 %q 不是有效 IP/CIDR（跳过）", value)
+				return
+			}
+			bits := 32
+			if addr.Is6() {
+				bits = 128
+			}
+			prefix = netip.PrefixFrom(addr, bits)
+		}
+		if _, dup := seen[prefix.String()]; dup {
+			return
+		}
+		seen[prefix.String()] = struct{}{}
+		merged = append(merged, prefix.String())
+	}
+	for _, entry := range inline {
+		appendCIDR(entry)
+	}
+	if len(refIDs) == 0 {
+		return merged, nil
+	}
+	entriesByID, _, err := loadIPListEntriesVia(store, refIDs)
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range refIDs {
+		entries, ok := entriesByID[id]
+		if !ok {
+			Logf("warn", "受信代理引用的地址列表 #%d 不存在（贡献零条目）", id)
+			continue
+		}
+		for _, entry := range entries {
+			appendCIDR(entry)
+		}
+	}
+	return merged, nil
 }
 
 // mergeTrustedProxyServerFields 把受信代理字段并入每个 HTTP server 条目

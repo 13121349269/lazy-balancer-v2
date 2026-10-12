@@ -874,8 +874,11 @@ func runMigrations() error {
 		// v2.3.x 真实 IP 支持：受信代理（CDN 回源）四列——启用开关、回源网段
 		// （CIDR JSON 数组）、请求头名（有序 JSON 数组）、严格模式。渲染层
 		// （servers.trusted_proxies）与 caddygeoip/限流/阶段 0 取值共用。
-		"global_config.trusted_proxy_enabled":         "INTEGER NOT NULL DEFAULT 0",
-		"global_config.trusted_proxy_ranges":          "TEXT NOT NULL DEFAULT '[]'",
+		"global_config.trusted_proxy_enabled": "INTEGER NOT NULL DEFAULT 0",
+		"global_config.trusted_proxy_ranges":  "TEXT NOT NULL DEFAULT '[]'",
+		// 受信网段引用名单（2026-10-12）：JSON 数组文本，存 security_ip_lists 的
+		// id 列表（镜像策略 ip_acl_list_refs 形态）；渲染与内联 CIDR 合并展开。
+		"global_config.trusted_proxy_range_refs":      "TEXT NOT NULL DEFAULT '[]'",
 		"global_config.trusted_proxy_headers":         "TEXT NOT NULL DEFAULT '[]'",
 		"global_config.trusted_proxy_strict":          "INTEGER NOT NULL DEFAULT 1",
 		"global_config.default_ca_provider_id":        "INTEGER DEFAULT 0",

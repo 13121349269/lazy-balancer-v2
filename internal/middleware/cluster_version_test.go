@@ -1000,6 +1000,15 @@ func TestClusterVersionTriggers_bumpForTrustedProxyColumns(t *testing.T) {
 	if got := clusterVersion(t, database); got != 1 {
 		t.Fatalf("version after trusted proxy update=%d, want 1", got)
 	}
+
+	// 受信代理引用列（trusted_proxy_range_refs）同入 OF——主端改引用名单
+	// 须即 bump 版本随快照下发（引用的名单本体在 security 节同步）。
+	if _, err := database.Exec(`UPDATE global_config SET trusted_proxy_range_refs='[1,2]' WHERE id=1`); err != nil {
+		t.Fatalf("update trusted proxy range refs: %v", err)
+	}
+	if got := clusterVersion(t, database); got != 2 {
+		t.Fatalf("version after trusted_proxy_range_refs update=%d, want 2", got)
+	}
 }
 
 // Given loginRateBuckets 已满 1024 桶（容量上限）。

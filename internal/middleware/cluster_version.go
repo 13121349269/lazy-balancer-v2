@@ -176,11 +176,13 @@ func installClusterVersionTriggers(database *sql.DB) error {
 	// 刻意排除——调度器每次备份推进,入列会让每轮备份引发全集群快照重放。
 	// F49-P5-8:trusted_proxy_* 四列入 OF(防御对齐)——主端保存受信代理设置
 	// 须即 bump 版本随快照下发,不在 OF 内则稳态变更永不传播到从节点。
+	// 2026-10-12:trusted_proxy_range_refs(引用名单 id)同入——引用的名单
+	// 本体在 security 节同步,refs 列变化须触发快照重放(从端渲染展开收敛)。
 	// L5-67-01(第 67 轮审计):threat_auto_update/threat_schedule_days/
 	// threat_schedule_time 三列入 OF(同 CL41-1 先例)——主端保存威胁库排程/
 	// 总开关即下发,从端升主后按主端排程运行。
 	if _, err := database.Exec(`CREATE TRIGGER cluster_version_global_config_update
-		AFTER UPDATE OF sync_users,sync_rules,sync_security,branding_json,caddy_config,log_level,access_log_json,access_log_format,task_log_size_mb,audit_log_size_mb,runtime_log_size_mb,audit_retention_months,jwt_expire_minutes,timezone,acme_email,cert_expiry_days,cert_renewal_days,cert_renewal_attempts,default_ca_provider_id,dns_provider,dns_credentials,sync_interval,admin_tls_enabled,admin_tls_mode,admin_tls_cert,admin_tls_key,caddy_log_level,caddy_log_size_mb,request_body_max_size_mb,http_read_timeout,http_write_timeout,http_idle_timeout,upstream_keepalive_timeout,proxy_dial_timeout,proxy_response_header_timeout,proxy_read_timeout,proxy_write_timeout,proxy_stream_timeout,proxy_flush_interval,proxy_stream_close_delay,server_tokens_hidden,oidc_config,mfa_write_guard,mfa_lockout_enabled,github_proxy_url,auto_backup_enabled,auto_backup_frequency,auto_backup_time,auto_backup_day,auto_backup_keep,auto_backup_sections,trusted_proxy_enabled,trusted_proxy_ranges,trusted_proxy_headers,trusted_proxy_strict,threat_auto_update,threat_schedule_days,threat_schedule_time
+		AFTER UPDATE OF sync_users,sync_rules,sync_security,branding_json,caddy_config,log_level,access_log_json,access_log_format,task_log_size_mb,audit_log_size_mb,runtime_log_size_mb,audit_retention_months,jwt_expire_minutes,timezone,acme_email,cert_expiry_days,cert_renewal_days,cert_renewal_attempts,default_ca_provider_id,dns_provider,dns_credentials,sync_interval,admin_tls_enabled,admin_tls_mode,admin_tls_cert,admin_tls_key,caddy_log_level,caddy_log_size_mb,request_body_max_size_mb,http_read_timeout,http_write_timeout,http_idle_timeout,upstream_keepalive_timeout,proxy_dial_timeout,proxy_response_header_timeout,proxy_read_timeout,proxy_write_timeout,proxy_stream_timeout,proxy_flush_interval,proxy_stream_close_delay,server_tokens_hidden,oidc_config,mfa_write_guard,mfa_lockout_enabled,github_proxy_url,auto_backup_enabled,auto_backup_frequency,auto_backup_time,auto_backup_day,auto_backup_keep,auto_backup_sections,trusted_proxy_enabled,trusted_proxy_ranges,trusted_proxy_range_refs,trusted_proxy_headers,trusted_proxy_strict,threat_auto_update,threat_schedule_days,threat_schedule_time
 		ON global_config
 		WHEN OLD.cluster_version IS NEW.cluster_version AND COALESCE(NEW.is_master,1)=1
 		BEGIN

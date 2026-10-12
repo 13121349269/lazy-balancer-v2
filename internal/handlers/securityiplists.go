@@ -663,6 +663,22 @@ func (h *Handlers) DeleteIPList(c *gin.Context) {
 		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: fmt.Sprintf("该 IP 列表正被 %d 个启用的安全策略引用，请先解除引用", len(referencingPolicyIDs))})
 		return
 	}
+	// 受信代理引用面守卫（2026-10-12，参照 crs_excluded 引用面守卫）：
+	// 被 trusted_proxy_range_refs 引用的名单删除会使受信网段渲染静默缺
+	// 条目（保存侧存在性门只拦新写入，不追存量悬空）——同事务内检查，
+	// 解除引用（Caddy 全局设置）后方可删除。查询/解析失败 fail-closed：
+	// 按被引用处理（宁可拒绝删除，不放行悬空引用）。
+	var trustedRefs string
+	if err := tx.QueryRowContext(c.Request.Context(), `SELECT COALESCE(trusted_proxy_range_refs,'[]') FROM global_config WHERE id=1`).Scan(&trustedRefs); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "校验受信代理引用失败"})
+		return
+	}
+	for _, refID := range parseIPListRefsIDs(trustedRefs) {
+		if refID == listID {
+			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "该 IP 列表正被受信代理网段引用，请先在 Caddy 全局设置中解除引用"})
+			return
+		}
+	}
 	// 快照名称与条目数须在 DELETE 前取（同事务内删除后行已不可见）
 	var delName, delEntries string
 	_ = tx.QueryRowContext(c.Request.Context(), "SELECT COALESCE(name,''), COALESCE(entries,'[]') FROM security_ip_lists WHERE id=?", id).Scan(&delName, &delEntries)

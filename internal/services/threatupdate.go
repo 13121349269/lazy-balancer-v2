@@ -354,17 +354,18 @@ func (m *ThreatUpdateManager) run(trigger string, rc *taskengine.RunContext) {
 	m.mu.Unlock()
 	// 名单内容变化 → 一次重载（引用名单的策略渲染随新内容收敛）。
 	// 重载门（2026-09-24 用户裁定）：变化的名单须被启用策略引用才重载——
-	// 无引用方的变化不打扰在役配置。
+	// 无引用方的变化不打扰在役配置。2026-10-12 扩展：受信代理网段引用
+	// （trusted_proxy_range_refs）同为引用方——渲染静态展开同需收敛。
 	forceReload := threatReloadPending
 	if len(changedIDs) == 0 && !forceReload {
 		AppendThreatUpdateLog("INFO", "unchanged", "全部源名单内容未变化，不重载 Caddy 配置")
-	} else if !forceReload && !threatListsReferencedByEnabledPolicy(changedIDs) {
-		AppendThreatUpdateLog("INFO", "unchanged", "名单内容已变化但无启用策略引用，不重载 Caddy 配置")
+	} else if !forceReload && !threatListsReferencedByEnabledPolicy(changedIDs) && !trustedListsReferencedByTrustedProxy(changedIDs) {
+		AppendThreatUpdateLog("INFO", "unchanged", "名单内容已变化但无启用策略或受信代理引用，不重载 Caddy 配置")
 	} else if threatReloader != nil {
 		if forceReload {
 			AppendThreatUpdateLog("INFO", "reloading", "上一轮重载失败，强制重载 Caddy 配置（自愈重试）")
 		} else {
-			AppendThreatUpdateLog("INFO", "reloading", "名单内容已变化且被策略引用，重载 Caddy 配置")
+			AppendThreatUpdateLog("INFO", "reloading", "名单内容已变化且被策略或受信代理引用，重载 Caddy 配置")
 		}
 		err := threatReloader()
 		// 数据类更新触发的重载统一留操作日志（2026-09-24 用户裁定补齐——
@@ -429,6 +430,34 @@ func threatListsReferencedByEnabledPolicy(listIDs []int) bool {
 		// 处理（fail-closed），漏查会跳过名单重载致引用方渲染不收敛。
 		Logf("error", "威胁情报库: 遍历策略引用失败（按被引用处理）: %v", err)
 		return true
+	}
+	return false
+}
+
+// trustedListsReferencedByTrustedProxy 报告任一名单 id 被
+// global_config.trusted_proxy_range_refs 引用（2026-10-12，威胁库门同款
+// fail-safe）：IP 名单内容变化时若被受信网段引用 → 需重载（渲染静态展开
+// 须收敛）。查询/迭代/解析失败均按「可能被引用」处理——宁可多一次重载，
+// 不欠引用方的渲染收敛（与 threatListsReferencedByEnabledPolicy 同口径）。
+func trustedListsReferencedByTrustedProxy(listIDs []int) bool {
+	want := map[int]bool{}
+	for _, id := range listIDs {
+		want[id] = true
+	}
+	var refs string
+	if err := db.DB.QueryRow(`SELECT COALESCE(trusted_proxy_range_refs,'[]') FROM global_config WHERE id=1`).Scan(&refs); err != nil {
+		Logf("error", "威胁情报库: 读取受信代理引用失败（按被引用处理）: %v", err)
+		return true
+	}
+	var ids []int
+	if err := json.Unmarshal([]byte(refs), &ids); err != nil {
+		Logf("error", "威胁情报库: 受信代理引用 JSON 解析失败（按被引用处理）: %v", err)
+		return true
+	}
+	for _, id := range ids {
+		if want[id] {
+			return true
+		}
 	}
 	return false
 }

@@ -263,18 +263,21 @@ type GlobalConfig struct {
 	MFAWriteGuard     bool `json:"mfa_write_guard"`
 	MFALockoutEnabled bool `json:"mfa_lockout_enabled"`
 	// v2.3.x 受信代理（CDN 真实 IP）：响应面。
-	TrustedProxyEnabled bool         `json:"trusted_proxy_enabled"`
-	TrustedProxyRanges  string       `json:"trusted_proxy_ranges"`
-	TrustedProxyHeaders string       `json:"trusted_proxy_headers"`
-	TrustedProxyStrict  bool         `json:"trusted_proxy_strict"`
-	ClusterVersion      int          `json:"cluster_version"`
-	ClusterToken        string       `json:"-"`
-	RegistrationID      int          `json:"-"`
-	RegistrationSecret  string       `json:"-"`
-	AppliedVersion      int          `json:"applied_version"`
-	LastSyncError       string       `json:"last_sync_error"`
-	LastSync            JSONNullTime `json:"last_sync"`
-	UpdatedAt           JSONNullTime `json:"updated_at"`
+	TrustedProxyEnabled bool   `json:"trusted_proxy_enabled"`
+	TrustedProxyRanges  string `json:"trusted_proxy_ranges"`
+	// 受信网段引用的 IP 地址列表 id（JSON 数组文本，2026-10-12）：与内联
+	// trusted_proxy_ranges 合并生效（渲染静态展开）。
+	TrustedProxyRangeRefs string       `json:"trusted_proxy_range_refs"`
+	TrustedProxyHeaders   string       `json:"trusted_proxy_headers"`
+	TrustedProxyStrict    bool         `json:"trusted_proxy_strict"`
+	ClusterVersion        int          `json:"cluster_version"`
+	ClusterToken          string       `json:"-"`
+	RegistrationID        int          `json:"-"`
+	RegistrationSecret    string       `json:"-"`
+	AppliedVersion        int          `json:"applied_version"`
+	LastSyncError         string       `json:"last_sync_error"`
+	LastSync              JSONNullTime `json:"last_sync"`
+	UpdatedAt             JSONNullTime `json:"updated_at"`
 }
 
 // Upstream represents an upstream server
@@ -601,10 +604,13 @@ type UpdateConfigRequest struct {
 	MFALockoutEnabled *bool `json:"mfa_lockout_enabled"`
 	// v2.3.x 受信代理（CDN 真实 IP）：指针化，nil=保留原值；ranges/headers
 	// 为 JSON 数组文本（有序），写侧校验并归一（裸 IP 补 /32 //128）。
-	TrustedProxyEnabled *bool   `json:"trusted_proxy_enabled"`
-	TrustedProxyRanges  *string `json:"trusted_proxy_ranges"`
-	TrustedProxyHeaders *string `json:"trusted_proxy_headers"`
-	TrustedProxyStrict  *bool   `json:"trusted_proxy_strict"`
+	// range_refs 为引用的 IP 地址列表 id（JSON 数组文本，2026-10-12），写侧
+	// 校验存在性/总 CIDR 上限/条目格式并归一为规范 JSON。
+	TrustedProxyEnabled   *bool   `json:"trusted_proxy_enabled"`
+	TrustedProxyRanges    *string `json:"trusted_proxy_ranges"`
+	TrustedProxyRangeRefs *string `json:"trusted_proxy_range_refs"`
+	TrustedProxyHeaders   *string `json:"trusted_proxy_headers"`
+	TrustedProxyStrict    *bool   `json:"trusted_proxy_strict"`
 }
 
 type CreateCertificateConfigRequest struct {

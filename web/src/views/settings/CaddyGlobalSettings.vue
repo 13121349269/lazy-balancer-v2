@@ -69,17 +69,49 @@
       </el-form-item>
       <template v-if="settings.trusted_proxy_enabled">
         <el-form-item label="受信网段">
+          <div class="trusted-inline-row">
+            <el-select
+              v-model="trustedRanges"
+              multiple
+              filterable
+              allow-create
+              default-first-option
+              :disabled="isReadOnly"
+              placeholder="粘贴该 CDN 回源网段（CIDR），以官方公布为准"
+              class="trusted-field"
+            />
+            <el-button
+              v-if="!isReadOnly"
+              link
+              type="primary"
+              class="trusted-save-list-btn"
+              :disabled="trustedRanges.length === 0"
+              @click="openSaveListDialog"
+            >存为列表</el-button>
+          </div>
+          <div class="form-tip-line">仅这些网段发来的请求头会被采信；未配对网段时所有头一律被忽略（最小 /8 与 /96）。{{ trustedPresetRangesDoc }}</div>
+        </el-form-item>
+        <el-form-item label="引用地址列表">
           <el-select
-            v-model="trustedRanges"
+            v-model="trustedRangeRefs"
             multiple
             filterable
-            allow-create
-            default-first-option
             :disabled="isReadOnly"
-            placeholder="粘贴该 CDN 回源网段（CIDR），以官方公布为准"
+            placeholder="选择要引用的 IP 地址列表"
             class="trusted-field"
+          >
+            <el-option v-for="l in customIpLists" :key="l.id" :label="`${l.name}（${l.entry_count} 条）`" :value="l.id" />
+          </el-select>
+          <div class="form-tip-line">引用「规则集 → IP 地址列表」中的可复用列表，条目与上方内联网段合并生效（合计 {{ trustedRangesTotalCount }} 条，上限 2000）</div>
+        </el-form-item>
+        <el-form-item v-if="trustedRangesEmpty">
+          <el-alert
+            type="warning"
+            :closable="false"
+            show-icon
+            title="受信网段为空：所有真实 IP 请求头将被忽略"
+            description="开启受信代理但内联与引用列表均为空时，任何来源的 X-Forwarded-For 等头都不会被采信（按连接来源 IP 判定）"
           />
-          <div class="form-tip-line">仅这些网段发来的请求头会被采信；未配对网段时所有头一律被忽略（最小 /8 与 /96）。{{ trustedPresetRangesDoc }}</div>
         </el-form-item>
         <el-form-item label="请求头">
           <el-select
@@ -176,17 +208,47 @@
       </div>
     </template>
   </el-dialog>
+
+  <el-dialog
+    v-model="saveListDialogVisible"
+    title="存为地址列表"
+    width="min(480px, 92vw)"
+    append-to-body
+    :close-on-click-modal="false"
+    :close-on-press-escape="!savingList"
+    :show-close="!savingList"
+  >
+    <div class="info-note-bar"><span class="info-note-desc">将创建列表并清空内联网段，改为引用后语义不变；仍需点击「保存」提交配置</span></div>
+    <el-form label-width="80px" @submit.prevent>
+      <el-form-item label="来源">
+        <span>当前内联网段（{{ trustedRanges.length }} 条）</span>
+      </el-form-item>
+      <el-form-item label="列表名称" required>
+        <el-input v-model="saveListForm.name" placeholder="列表名称" maxlength="50" show-word-limit />
+      </el-form-item>
+      <el-form-item label="分类">
+        <el-select v-model="saveListForm.category" allow-create filterable default-first-option placeholder="选择或输入分类" style="width: 100%">
+          <el-option v-for="c in IP_LIST_CATEGORIES" :key="c" :label="c" :value="c" />
+        </el-select>
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button @click="saveListDialogVisible = false" :disabled="savingList">取消</el-button>
+      <el-button type="primary" :loading="savingList" @click="confirmSaveAsList">创建并引用</el-button>
+    </template>
+  </el-dialog>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { RefreshRight, Setting, Tickets, View } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { ansiToHtml } from '@/utils/ansi'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import { CDN_PRESETS, DEFAULT_ACCESS_LOG_FORMAT } from '@/utils/caddyDefaults'
-import type { ProxyTimeoutConfig } from '@/types'
+import { IP_LIST_CATEGORIES } from '@/utils/securityStages'
+import type { APIResponse, ProxyTimeoutConfig } from '@/types'
 import ProxyTimeoutFields from '@/components/rules/ProxyTimeoutFields.vue'
 
 type CaddySettingsConfig = ProxyTimeoutConfig & {
@@ -200,9 +262,10 @@ type CaddySettingsConfig = ProxyTimeoutConfig & {
   server_tokens_hidden: boolean
   access_log_json: boolean
   access_log_format: string
-  // v2.3.x 受信代理（CDN 真实 IP）
+  // v2.3.x 受信代理（CDN 真实 IP）；range_refs 为引用列表 id 的 JSON 数组文本
   trusted_proxy_enabled: boolean
   trusted_proxy_ranges: string
+  trusted_proxy_range_refs: string
   trusted_proxy_headers: string
   trusted_proxy_strict: boolean
 }
@@ -230,6 +293,7 @@ const CADDY_CONFIG_KEYS = [
   'access_log_format',
   'trusted_proxy_enabled',
   'trusted_proxy_ranges',
+  'trusted_proxy_range_refs',
   'trusted_proxy_headers',
   'trusted_proxy_strict',
   'proxy_dial_timeout',
@@ -254,6 +318,8 @@ const saving = ref(false)
 // —— 受信代理（CDN 真实 IP，v2.3.x）：settings 携 JSON 文本，表单用数组代理 ——
 const trustedRanges = ref<string[]>([])
 const trustedHeaders = ref<string[]>([])
+// 引用地址列表（2026-10-12）：id 数组 ↔ trusted_proxy_range_refs JSON 文本
+const trustedRangeRefs = ref<number[]>([])
 const trustedPresetKey = ref('')
 const trustedPresetNote = computed(() => CDN_PRESETS.find(p => p.label === trustedPresetKey.value)?.note || '')
 const trustedPresetRangesDoc = computed(() => {
@@ -270,19 +336,91 @@ const parseTrustedList = (raw: string): string[] => {
   }
 }
 
+const parseTrustedRefIds = (raw: string): number[] => {
+  try {
+    const parsed: unknown = JSON.parse(raw || '[]')
+    return Array.isArray(parsed) ? parsed.filter((v): v is number => typeof v === 'number' && Number.isInteger(v)) : []
+  } catch {
+    return []
+  }
+}
+
 // settings（外部回填/加载）→ 表单数组
-watch(() => [settings.value.trusted_proxy_ranges, settings.value.trusted_proxy_headers], ([ranges, headers]) => {
+watch(() => [settings.value.trusted_proxy_ranges, settings.value.trusted_proxy_headers, settings.value.trusted_proxy_range_refs], ([ranges, headers, refs]) => {
   trustedRanges.value = parseTrustedList(ranges)
   trustedHeaders.value = parseTrustedList(headers)
+  trustedRangeRefs.value = parseTrustedRefIds(refs)
 }, { immediate: true })
 // 表单数组 → settings（保存载荷经 CADDY_CONFIG_KEYS 拾取 JSON 文本）
 watch(trustedRanges, (list) => { settings.value.trusted_proxy_ranges = JSON.stringify(list) })
 watch(trustedHeaders, (list) => { settings.value.trusted_proxy_headers = JSON.stringify(list) })
+watch(trustedRangeRefs, (ids) => { settings.value.trusted_proxy_range_refs = JSON.stringify(ids) })
 
 const applyTrustedPreset = (label: string): void => {
   const preset = CDN_PRESETS.find(p => p.label === label)
   if (!preset) return
   trustedHeaders.value = [...preset.headers]
+}
+
+// —— 引用地址列表选项（与策略侧引用选择器同数据源；仅非内置名单） ——
+interface TrustedIpListOption { id: number; name: string; entry_count: number; system?: boolean }
+const ipLists = ref<TrustedIpListOption[]>([])
+const customIpLists = computed(() => ipLists.value.filter((l) => !l.system))
+const fetchIpLists = async (): Promise<void> => {
+  try {
+    const res = await request.get<APIResponse<TrustedIpListOption[]>>('/security/ip-lists', { silent: true })
+    ipLists.value = res.data || []
+  } catch {
+    // 静默失败：选择器退化为空列表，空警告按内联口径显示
+    ipLists.value = []
+  }
+}
+onMounted(() => { void fetchIpLists() })
+
+// 空警告与合计：引用侧条数按选项缓存 entry_count 汇总（与后端展开上限同口径）
+const referencedEntryCount = computed(() => trustedRangeRefs.value.reduce((sum, id) => sum + (ipLists.value.find((l) => l.id === id)?.entry_count ?? 0), 0))
+const trustedRangesTotalCount = computed(() => trustedRanges.value.length + referencedEntryCount.value)
+const trustedRangesEmpty = computed(() => settings.value.trusted_proxy_enabled && trustedRangesTotalCount.value === 0)
+
+// —— 存为列表：内联网段一键建名单并转为引用（镜像策略侧「提取为列表」） ——
+const saveListDialogVisible = ref(false)
+const saveListForm = ref({ name: '受信代理网段', category: 'CDN 节点' })
+const savingList = ref(false)
+const openSaveListDialog = (): void => {
+  saveListForm.value = { name: '受信代理网段', category: 'CDN 节点' }
+  saveListDialogVisible.value = true
+}
+const confirmSaveAsList = async (): Promise<void> => {
+  if (savingList.value) return
+  const name = saveListForm.value.name.trim()
+  if (!name) { ElMessage.warning('请输入列表名称'); return }
+  if (name.length > 50) { ElMessage.warning('列表名称不能超过 50 字符'); return }
+  if (saveListForm.value.category.length > 32) { ElMessage.warning('分类不能超过 32 字符'); return }
+  const sourceEntries = trustedRanges.value.map((value) => value.trim()).filter((value) => value !== '')
+  if (sourceEntries.length === 0) { ElMessage.warning('内联网段为空，无需存为列表'); return }
+  savingList.value = true
+  try {
+    const res = await request.post<APIResponse<{ id: number }>>('/security/ip-lists', {
+      name,
+      description: '',
+      category: saveListForm.value.category.trim(),
+      // entries 与其余名单字段同口径：JSON 数组文本（后端 Entries 为 string）
+      entries: JSON.stringify(sourceEntries.map((value) => ({ value, remark: '受信代理网段' }))),
+    })
+    const newId = res.data?.id
+    if (!newId) throw new Error('创建列表响应缺少 id')
+    // 交换语义：新建列表 → 并入 refs → 清空内联（合并生效集不变）；
+    // 配置不在此保存——用户点「保存」才提交（PUT /config 落库并重载）
+    trustedRangeRefs.value = [...new Set([...trustedRangeRefs.value, newId])]
+    trustedRanges.value = []
+    saveListDialogVisible.value = false
+    // 刷新选项缓存：选择器与「合计 N 条」立即反映新列表
+    await fetchIpLists()
+    mfaAwareSuccess(`已创建列表「${name}」并转为引用，内联网段已清空（语义不变），保存配置后生效`)
+  } catch (error: unknown) {
+    // 409 重名 / 400 条目非法已由全局拦截器 toast，这里仅记录避免 unhandled rejection
+    console.error('Failed to save trusted ranges as IP list:', error)
+  } finally { savingList.value = false }
 }
 const reloading = ref(false)
 const logDialogVisible = ref(false)
@@ -309,6 +447,17 @@ const updateProxyTimeout = (field: keyof ProxyTimeoutConfig, value: number): voi
 
 const handleSave = async (): Promise<void> => {
   if (isReadOnly.value || saving.value) return
+  // 空警告（2026-10-12 用户裁定口径）：开启受信代理且（内联+引用展开）为空
+  // → 保存前显式确认——该形态下所有真实 IP 头都会被忽略
+  if (trustedRangesEmpty.value) {
+    try {
+      await ElMessageBox.confirm('受信网段为空 = 所有真实 IP 请求头将被忽略（按连接来源 IP 判定）。确定继续保存？', '受信网段为空', {
+        confirmButtonText: '仍然保存', cancelButtonText: '返回修改', type: 'warning',
+      })
+    } catch {
+      return
+    }
+  }
   saving.value = true
   try {
     // 显式白名单：settings 是与 BasicSettings 共享的同一对象，全量展开会把
@@ -416,6 +565,10 @@ onUnmounted(stopLogPolling)
 .caddy-form { width: 100%; }
 .number-input { width: 120px; }
 .trusted-field { width: 100%; max-width: 560px; }
+/* 内联网段行：选择器 + 「存为列表」链接钮（镜像策略侧 acl-inline-row 形态） */
+.trusted-inline-row { display: flex; align-items: flex-start; gap: 8px; width: 100%; max-width: 560px; }
+.trusted-inline-row .trusted-field { flex: 1; max-width: none; }
+.trusted-save-list-btn { flex-shrink: 0; margin-top: 4px; }
 .trusted-preset-field { width: 260px; }
 .trusted-toggle { display: flex; flex-direction: column; align-items: flex-start; }
 /* 单行描述(2026-09-19 图片报障):只加 nowrap,不做溢出裁切(窄屏容忍伸出) */

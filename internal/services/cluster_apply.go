@@ -1182,11 +1182,11 @@ func updateSnapshotSettings(ctx context.Context, tx *sql.Tx, snapshot models.Clu
 		} else if settings.RequestBodyMaxSizeMB > 4096 {
 			settings.RequestBodyMaxSizeMB = 4096
 		}
-		query += ",caddy_config=?,access_log_json=?,access_log_format=?,caddy_log_level=?,caddy_log_size_mb=?,request_body_max_size_mb=?,http_read_timeout=?,http_write_timeout=?,http_idle_timeout=?,upstream_keepalive_timeout=?,proxy_dial_timeout=?,proxy_response_header_timeout=?,proxy_read_timeout=?,proxy_write_timeout=?,proxy_stream_timeout=?,proxy_flush_interval=?,proxy_stream_close_delay=?,server_tokens_hidden=?,trusted_proxy_enabled=?,trusted_proxy_ranges=?,trusted_proxy_headers=?,trusted_proxy_strict=?"
+		query += ",caddy_config=?,access_log_json=?,access_log_format=?,caddy_log_level=?,caddy_log_size_mb=?,request_body_max_size_mb=?,http_read_timeout=?,http_write_timeout=?,http_idle_timeout=?,upstream_keepalive_timeout=?,proxy_dial_timeout=?,proxy_response_header_timeout=?,proxy_read_timeout=?,proxy_write_timeout=?,proxy_stream_timeout=?,proxy_flush_interval=?,proxy_stream_close_delay=?,server_tokens_hidden=?,trusted_proxy_enabled=?,trusted_proxy_ranges=?,trusted_proxy_range_refs=?,trusted_proxy_headers=?,trusted_proxy_strict=?"
 		args = append(args, *snapshot.CaddyConfig, settings.AccessLogJSON, settings.AccessLogFormat, settings.CaddyLogLevel, settings.CaddyLogSizeMB,
 			settings.RequestBodyMaxSizeMB, settings.HTTPReadTimeout, settings.HTTPWriteTimeout, settings.HTTPIdleTimeout,
 			settings.UpstreamKeepaliveTimeout, settings.ProxyDialTimeout, settings.ProxyResponseHeaderTimeout, settings.ProxyReadTimeout, settings.ProxyWriteTimeout, settings.ProxyStreamTimeout, settings.ProxyFlushInterval, settings.ProxyStreamCloseDelay,
-			settings.ServerTokensHidden, settings.TrustedProxyEnabled, settings.TrustedProxyRanges, settings.TrustedProxyHeaders, settings.TrustedProxyStrict)
+			settings.ServerTokensHidden, settings.TrustedProxyEnabled, settings.TrustedProxyRanges, settings.TrustedProxyRangeRefs, settings.TrustedProxyHeaders, settings.TrustedProxyStrict)
 	}
 	query += " WHERE id=1"
 	if _, err := tx.ExecContext(ctx, query, args...); err != nil {

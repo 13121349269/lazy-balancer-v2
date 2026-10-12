@@ -218,15 +218,18 @@ type ClusterBasicSettings struct {
 	GitHubProxyURL             string `json:"github_proxy_url,omitempty"`
 	ServerTokensHidden         bool   `json:"server_tokens_hidden,omitempty"`
 	// v2.3.x 受信代理（CDN 真实 IP）：随 Caddy 全局轴同步——从节点渲染层
-	// （servers.trusted_proxies）与数据面取值与主节点一致。
-	TrustedProxyEnabled bool   `json:"trusted_proxy_enabled,omitempty"`
-	TrustedProxyRanges  string `json:"trusted_proxy_ranges,omitempty"`
-	TrustedProxyHeaders string `json:"trusted_proxy_headers,omitempty"`
-	TrustedProxyStrict  bool   `json:"trusted_proxy_strict,omitempty"`
-	AdminTLSEnabled     bool   `json:"admin_tls_enabled,omitempty"`
-	AdminTLSMode        string `json:"admin_tls_mode,omitempty"`
-	AdminTLSCert        string `json:"admin_tls_cert,omitempty"`
-	AdminTLSKey         string `json:"admin_tls_key,omitempty"`
+	// （servers.trusted_proxies）与数据面取值与主节点一致。range_refs 为
+	// 引用的 IP 地址列表 id（JSON 数组文本，2026-10-12），引用的名单本体
+	// 在 security 节同步——从端渲染同样静态展开。
+	TrustedProxyEnabled   bool   `json:"trusted_proxy_enabled,omitempty"`
+	TrustedProxyRanges    string `json:"trusted_proxy_ranges,omitempty"`
+	TrustedProxyRangeRefs string `json:"trusted_proxy_range_refs,omitempty"`
+	TrustedProxyHeaders   string `json:"trusted_proxy_headers,omitempty"`
+	TrustedProxyStrict    bool   `json:"trusted_proxy_strict,omitempty"`
+	AdminTLSEnabled       bool   `json:"admin_tls_enabled,omitempty"`
+	AdminTLSMode          string `json:"admin_tls_mode,omitempty"`
+	AdminTLSCert          string `json:"admin_tls_cert,omitempty"`
+	AdminTLSKey           string `json:"admin_tls_key,omitempty"`
 	// v2.1.8 MFA 全局开关（决策3：从节点行为与主节点一致）。
 	MFAWriteGuard bool `json:"mfa_write_guard"`
 	// v2.3.0:OIDC 配置(原样 JSON 字符串)随 global 节同步——从节点回调独立
