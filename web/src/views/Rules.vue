@@ -794,7 +794,7 @@
                 <span class="form-tip-inline">{{ ntlmOn ? '重试已禁用，间隔不生效' : ((wizardForm.tcp_try_duration || 0) <= 0 ? '窗口未启用时间隔不生效' : '毫秒，每次重试间隔；0 表示使用 Caddy 默认间隔') }}</span>
               </el-form-item>
 
-              <el-form-item label="PROXY V2">
+              <el-form-item v-if="wizardForm.protocol === 'tcp'" label="PROXY V2">
                 <el-switch v-model="wizardForm.tcp_proxy_protocol" />
                 <span class="form-tip-inline">开启后向上游发送 PROXY v2 协议头传递真实客户端 IP，需后端支持</span>
               </el-form-item>
