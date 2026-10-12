@@ -439,15 +439,21 @@ func threatListsReferencedByEnabledPolicy(listIDs []int) bool {
 // fail-safe）：IP 名单内容变化时若被受信网段引用 → 需重载（渲染静态展开
 // 须收敛）。查询/迭代/解析失败均按「可能被引用」处理——宁可多一次重载，
 // 不欠引用方的渲染收敛（与 threatListsReferencedByEnabledPolicy 同口径）。
+// RV72-N3（第 72 轮复审）：trusted_proxy_enabled=0 时渲染不消费 refs
+// （caddy.go 受信代理块整体不渲染），refs 残留无收敛义务——不触发重载。
 func trustedListsReferencedByTrustedProxy(listIDs []int) bool {
 	want := map[int]bool{}
 	for _, id := range listIDs {
 		want[id] = true
 	}
+	var enabled int
 	var refs string
-	if err := db.DB.QueryRow(`SELECT COALESCE(trusted_proxy_range_refs,'[]') FROM global_config WHERE id=1`).Scan(&refs); err != nil {
+	if err := db.DB.QueryRow(`SELECT COALESCE(trusted_proxy_enabled,0), COALESCE(trusted_proxy_range_refs,'[]') FROM global_config WHERE id=1`).Scan(&enabled, &refs); err != nil {
 		Logf("error", "威胁情报库: 读取受信代理引用失败（按被引用处理）: %v", err)
 		return true
+	}
+	if enabled == 0 {
+		return false
 	}
 	var ids []int
 	if err := json.Unmarshal([]byte(refs), &ids); err != nil {

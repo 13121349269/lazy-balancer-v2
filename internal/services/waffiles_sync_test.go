@@ -820,7 +820,7 @@ func TestApplyWafFileBundle_rejectsTamperedThreatFast(t *testing.T) {
 
 // U6-P4-1：空声明哈希携内容——合法主节点 BuildWafFileBundle 恒成对设置，
 // 仅恶意/损坏主节点可构造；与 CRS/xdb 侧同纵深防御，拒绝而非裸写未验证
-// 字节（原实现会在本地文件缺失时以 fileSha256==""==tf.Sha256 静默跳过或
+// 字节（原实现会在本地文件缺失时以整读哈希空串哨兵==tf.Sha256 静默跳过或
 // 直接落盘）。
 func TestApplyWafFileBundle_rejectsThreatFastWithoutDeclaredHash(t *testing.T) {
 	dst := t.TempDir()

@@ -3091,7 +3091,8 @@ func TestSecurityEventsAttribution_CustomFamilyCapabilityPreference(t *testing.T
 // 门格逐格对照发射侧单一事实：
 //   - off：CRS/自定义/body 守卫全关（仅 IP 族独立发射，非本表维度）；
 //   - custom_only：CRS 全拒（零 Include）；id:11 blocked 拒（pass 动作恒不中断，
-//     无 949 评分链）；logged 可产——emitBodyProcessorRules 在 custom_only 恒发射；
+//     无 949 评分链）；logged 可产——emitBodyProcessorRules 在 custom_only 存在
+//     启用自定义规则时发射（SEC-B-1 收紧，模式粒度门不变）；
 //   - detection：blocked 拒 CRS（id:6 切换先于 CRS）；自定义/含 id:11 logged 可产；
 //   - blocking：门全域；id:11 blocked 保持可行格（发射面恒在；物理上 pass 恒不
 //     中断、该形状事件不存在，恒真格无害）。
@@ -3335,4 +3336,30 @@ func resetSecurityEventsPollState(t *testing.T) {
 		securityEventsPollState.inited = false
 		securityEventsPollState.Unlock()
 	})
+}
+
+// TestSecurityEventsPolicyContainsRule_leadingZeroRuleIDGroupDecode（SEC-B-3，
+// 第 72 轮）：ruleTriggered 前导零等畸形串（Atoi 可解析入 900000-999999
+// 区间但长度≠6）的组号解码防御——7 位串 "0942100" 的 [1:3] 切片错位切出
+// "94"（数值 942100 真实组号是 21），存量/带外数据若携带 "94" 组号会被
+// 误认领。非 6 位走保守分支：组号不可解码即不认领（事件归属由 fallback
+// 层兜底，「摄取必有归属」不破）。生产不可达，纯防御钉。
+func TestSecurityEventsPolicyContainsRule_leadingZeroRuleIDGroupDecode(t *testing.T) {
+	// Given：blocking 策略组号存量 "94"（带外/旧数据形态）；畸形前导零规则
+	// ID "0942100"（数值 942100，真实组号 21，[1:3] 错位切片恰得 "94"）
+	policy := &models.SecurityPolicy{Mode: "blocking", CRSRuleGroups: json.RawMessage(`["94"]`)}
+	// When
+	claimed := securityEventsPolicyContainsRule(policy, "0942100", "198.51.100.9")
+	// Then：不得被错位解码的 "94" 组误认领
+	if claimed {
+		t.Fatal("leading-zero rule id 0942100（真实组号 21）不得被错位切片解码出的 \"94\" 组认领")
+	}
+	// 回归形状：规范 6 位形态组号解码不受影响（组 42 策略认领 942100）
+	regPolicy := &models.SecurityPolicy{Mode: "blocking", CRSRuleGroups: json.RawMessage(`["42"]`)}
+	if !securityEventsPolicyContainsRule(regPolicy, "942100", "198.51.100.9") {
+		t.Fatal("规范 6 位形态 942100 必须按组 42 正常认领（回归形状）")
+	}
+	// 畸形形状：前导零串同样不得被真实组 21 策略按错位解码误配/误拒 panic
+	g21Policy := &models.SecurityPolicy{Mode: "blocking", CRSRuleGroups: json.RawMessage(`["21"]`)}
+	_ = securityEventsPolicyContainsRule(g21Policy, "0942100", "198.51.100.9") // 断言不 panic
 }

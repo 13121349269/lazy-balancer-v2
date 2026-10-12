@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -26,8 +27,18 @@ func TestSetClusterMode_returns_registration_id_when_local_transition_fails(t *t
 		_ = db.Close()
 		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
 	})
+	// CLUSTER-1（第 72 轮审计）：本地转换失败的注入不再关闭包级 db.DB——
+	// 假 handler 关包级句柄会污染全局状态（Cleanup 前的审计与断言全踩
+	// closed 连接）。改为给 clusterService 单独注入已关闭句柄，BecomeSlave
+	// 的 DB 失败语义不变且不外溢。
+	closedDB, err := sql.Open("sqlite", t.TempDir()+"/closed.db")
+	if err != nil {
+		t.Fatalf("open closed-handle database: %v", err)
+	}
+	if err := closedDB.Close(); err != nil {
+		t.Fatalf("close handle: %v", err)
+	}
 	master := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = db.DB.Close()
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"data":{"registration_id":73,"registration_secret":"secret"}}`))
 	}))
@@ -36,7 +47,7 @@ func TestSetClusterMode_returns_registration_id_when_local_transition_fails(t *t
 	h := &Handlers{
 		cfg:            cfg,
 		syncService:    services.NewSyncService(db.DB, cfg, services.NewCaddyService("http://127.0.0.1:1")),
-		clusterService: services.NewClusterService(db.DB, nil, ""),
+		clusterService: services.NewClusterService(closedDB, nil, ""),
 	}
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
@@ -81,7 +92,6 @@ func TestPromoteClusterNode_reportsUnavailableBeforePromoting(t *testing.T) {
 	t.Cleanup(func() {
 		_ = db.Close()
 		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
-		db.SetDB(oldDB)
 	})
 	if _, err := db.DB.Exec("UPDATE global_config SET is_master=0, master_url='', cluster_token='' WHERE id=1"); err != nil {
 		t.Fatal(err)

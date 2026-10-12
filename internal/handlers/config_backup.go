@@ -2848,8 +2848,8 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 	// 补写——commit 失败路径已在上方 return，任务日志不再出现「重载/更新
 	// 成功」与实际回滚态矛盾的行。
 	if wafCrsApplied {
-		services.AppendCRSUpdateLog("INFO", "reloading", "重载 Caddy 配置")
-		services.AppendCRSUpdateLog("INFO", "success", "CRS 已随备份导入更新")
+		services.WriteCRSUpdateLog("INFO", "reloading", "重载 Caddy 配置")
+		services.WriteCRSUpdateLog("INFO", "success", "CRS 已随备份导入更新")
 	}
 
 	if reseedBlockPageNeeded {

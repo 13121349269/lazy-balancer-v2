@@ -422,7 +422,9 @@ func TestBrandingHotReload_loggingAndKeepLastGood(t *testing.T) {
 		t.Fatalf("first load app_name=%q", cfg.AppName)
 	}
 	var n int
-	db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action='重载' AND resource='品牌配置'`).Scan(&n)
+	if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action='重载' AND resource='品牌配置'`).Scan(&n); err != nil {
+		t.Fatalf("count reload audit rows: %v", err)
+	}
 	if n != 0 {
 		t.Fatalf("boot load must not log reload, got %d rows", n)
 	}
@@ -452,7 +454,9 @@ func TestBrandingHotReload_loggingAndKeepLastGood(t *testing.T) {
 		t.Fatalf("partial write must keep last good, got app_name=%q", cfg.AppName)
 	}
 	var n2 int
-	db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action='重载'`).Scan(&n2)
+	if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action='重载'`).Scan(&n2); err != nil {
+		t.Fatalf("count reload audit rows: %v", err)
+	}
 	if n2 != 1 {
 		t.Errorf("partial write must not log reload, got %d rows", n2)
 	}
@@ -484,7 +488,9 @@ func TestBrandingHotReload_touchNoChurn(t *testing.T) {
 	waitForDistinctMtime(t, path, st.ModTime())
 	loadBrandingConfig(dir)
 	var n int
-	db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action='重载'`).Scan(&n)
+	if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action='重载'`).Scan(&n); err != nil {
+		t.Fatalf("count reload audit rows: %v", err)
+	}
 	if n != 0 {
 		t.Errorf("unchanged content must not log reload, got %d", n)
 	}

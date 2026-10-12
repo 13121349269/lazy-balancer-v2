@@ -1,3 +1,6 @@
+// 主题：v1 规则导入转换的负载策略告警口径——空 balancer_type 静默落入默认
+// weighted_round_robin（不告警）；非空且不可映射的值保留告警。文件名
+// balancer_check 为历史遗留，实质钉的是 convertV1Rules 的 warnings 行为。
 package handlers
 
 import "testing"

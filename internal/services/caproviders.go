@@ -135,11 +135,14 @@ var ErrCAProviderMaxConcurrentTooHigh = errors.New("max_concurrent must be <= 10
 // ErrCAProviderMinIntervalTooHigh is returned when min_interval_ms exceeds the allowed upper bound.
 var ErrCAProviderMinIntervalTooHigh = errors.New("min_interval_ms must be <= 60000")
 
-// UpdateCAProvider updates a CA provider. Returns ErrCAProviderNotFound if no rows were affected.
-func (s *CAProviderService) UpdateCAProvider(id int, req models.UpdateCAProviderRequest) error {
+// UpdateCAProvider updates a CA provider and returns the pre-update row as read
+// inside the same transaction (CERT-N1, 第 72 轮：调用方（handler 审计 changed
+// 清单）以事务内旧行为比对基线，消除「事务外预读 → 事务提交」窗口内并发
+// 写入导致的清单失真）。Returns ErrCAProviderNotFound if no rows were affected.
+func (s *CAProviderService) UpdateCAProvider(id int, req models.UpdateCAProviderRequest) (models.CAProvider, error) {
 	tx, err := db.DB.Begin()
 	if err != nil {
-		return err
+		return models.CAProvider{}, err
 	}
 	defer tx.Rollback()
 
@@ -147,10 +150,13 @@ func (s *CAProviderService) UpdateCAProvider(id int, req models.UpdateCAProvider
 	err = scanCAProvider(tx.QueryRow("SELECT "+caProviderColumns+" FROM ca_providers WHERE id=?", id), &existing)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return ErrCAProviderNotFound
+			return models.CAProvider{}, ErrCAProviderNotFound
 		}
-		return err
+		return models.CAProvider{}, err
 	}
+	// CERT-N1：事务内旧行快照——existing 就地应用 req 变更后用于写库，
+	// old 保持 SELECT 读到的原值供调用方做审计比对。
+	old := existing
 	if req.Name != nil {
 		existing.Name = *req.Name
 	}
@@ -174,7 +180,7 @@ func (s *CAProviderService) UpdateCAProvider(id int, req models.UpdateCAProvider
 	}
 
 	if existing.Provider != ProviderLetsEncrypt && existing.Provider != ProviderZeroSSL {
-		return ErrCAProviderInvalidProvider
+		return models.CAProvider{}, ErrCAProviderInvalidProvider
 	}
 	if existing.Provider == ProviderLetsEncrypt {
 		existing.DirectoryURL = LetsEncryptDirectoryURL
@@ -182,22 +188,28 @@ func (s *CAProviderService) UpdateCAProvider(id int, req models.UpdateCAProvider
 		existing.DirectoryURL = ZeroSSLDirectoryURL
 	}
 	if existing.Name == "" {
-		return ErrCAProviderInvalidName
+		return models.CAProvider{}, ErrCAProviderInvalidName
 	}
 	if len([]rune(existing.Name)) > 100 {
-		return ErrCAProviderNameTooLong
+		return models.CAProvider{}, ErrCAProviderNameTooLong
 	}
 
-	var creds models.CAProviderCredentials
-	if existing.Credentials != "" {
-		if err := json.Unmarshal([]byte(existing.Credentials), &creds); err != nil {
-			return ErrCAProviderInvalidCredentials
-		}
-	}
+	// CERT-N2（第 72 轮）：LE 分支前移到 JSON 门之前——LE 凭证本就必须为空，
+	// 纯空白输入（用户清空 EAB 字段的残留）此前在 JSON 门被「凭证必须是有效
+	// 的 JSON」拒绝，永远无法保存；现在归一为空串落库（前端 parseCACredentials
+	// 对空串走 falsy 分支）。非 LE 提供商仍走完整 JSON 门。
 	if existing.Provider == ProviderLetsEncrypt {
 		trimmed := strings.TrimSpace(existing.Credentials)
 		if trimmed != "" && trimmed != "{}" {
-			return ErrCAProviderLetsEncryptCredentialsNotEmpty
+			return models.CAProvider{}, ErrCAProviderLetsEncryptCredentialsNotEmpty
+		}
+		if trimmed == "" {
+			existing.Credentials = ""
+		}
+	} else if existing.Credentials != "" {
+		var creds models.CAProviderCredentials
+		if err := json.Unmarshal([]byte(existing.Credentials), &creds); err != nil {
+			return models.CAProvider{}, ErrCAProviderInvalidCredentials
 		}
 	}
 
@@ -205,13 +217,13 @@ func (s *CAProviderService) UpdateCAProvider(id int, req models.UpdateCAProvider
 		existing.MaxConcurrent = 1
 	}
 	if existing.MaxConcurrent > 100 {
-		return ErrCAProviderMaxConcurrentTooHigh
+		return models.CAProvider{}, ErrCAProviderMaxConcurrentTooHigh
 	}
 	if existing.MinIntervalMS <= 0 {
 		existing.MinIntervalMS = 1000
 	}
 	if existing.MinIntervalMS > 60000 {
-		return ErrCAProviderMinIntervalTooHigh
+		return models.CAProvider{}, ErrCAProviderMinIntervalTooHigh
 	}
 
 	// CERT-L1（第 69 轮）：「最后一个启用」守卫收敛进 UPDATE 的 WHERE 子查询——
@@ -231,25 +243,25 @@ func (s *CAProviderService) UpdateCAProvider(id int, req models.UpdateCAProvider
 	}
 	res, err := tx.Exec(query, args...)
 	if err != nil {
-		return err
+		return models.CAProvider{}, err
 	}
 	rows, err := res.RowsAffected()
 	if err != nil {
-		return err
+		return models.CAProvider{}, err
 	}
 	if rows == 0 {
 		// 禁用分支的 0 行即守卫子查询拒绝（行存在性已由本事务内 SELECT 证明），
 		// 归因为 ErrCAProviderLastEnabled 而非 ErrCAProviderNotFound。
 		if disabling {
-			return ErrCAProviderLastEnabled
+			return models.CAProvider{}, ErrCAProviderLastEnabled
 		}
-		return ErrCAProviderNotFound
+		return models.CAProvider{}, ErrCAProviderNotFound
 	}
 
 	if err := tx.Commit(); err != nil {
-		return err
+		return models.CAProvider{}, err
 	}
-	return nil
+	return old, nil
 }
 
 // CAProviderTestError records a failure during the ACME test phase.

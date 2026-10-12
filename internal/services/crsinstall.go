@@ -266,7 +266,7 @@ func (m *CRSUpdateManager) downloadAndInstall(parent context.Context, tag string
 		// header 仅一份。重复 SecRule id 风险（R53 新-2 关注点）由行级去重
 		// 消除——同一行不会写入两次。
 		pendingOverrides = mergeOverridesLines(filepath.Join(m.crsDir, "zz-user-overrides.conf"), header, diff)
-		writeCRSUpdateLog("INFO", string(CRSStatusInstalling),
+		WriteCRSUpdateLog("INFO", string(CRSStatusInstalling),
 			fmt.Sprintf("已迁移 %d 行用户自定义配置到 zz-user-overrides.conf", len(diff)))
 	}
 
@@ -291,19 +291,19 @@ func (m *CRSUpdateManager) downloadAndInstall(parent context.Context, tag string
 	// 审计 V-IMPORTANT-1（第五轮）：先写后失败的版本行回滚——不回滚则
 	// currentCRSVersion() 已为新 tag，下轮自动更新短路「已是最新」、失败被掩盖
 	// 且永不重试（直到重启）。旧 tag 由交换段锁内读出（prevTag）。
-	writeCRSUpdateLog("INFO", string(CRSStatusReloading), "应用新规则并重载 Caddy")
+	WriteCRSUpdateLog("INFO", string(CRSStatusReloading), "应用新规则并重载 Caddy")
 	if m.reloader != nil {
 		err := m.reloader()
 		recordSystemReloadAudit("crs_update", err)
 		if err != nil {
-			writeCRSUpdateLog("ERROR", string(CRSStatusReloading), fmt.Sprintf("重载失败: %v", err))
+			WriteCRSUpdateLog("ERROR", string(CRSStatusReloading), fmt.Sprintf("重载失败: %v", err))
 			m.restoreBackup()
 			// 版本行回滚到旧值，恢复下轮重试能力
 			if _, rbErr := db.DB.Exec(
 				"UPDATE security_crs_version SET version=?, updated_at=datetime('now') WHERE id=1",
 				prevTag,
 			); rbErr != nil {
-				writeCRSUpdateLog("ERROR", string(CRSStatusReloading), fmt.Sprintf("版本行回滚失败（重启后 ReconcileCRSState 自愈）: %v", rbErr))
+				WriteCRSUpdateLog("ERROR", string(CRSStatusReloading), fmt.Sprintf("版本行回滚失败（重启后 ReconcileCRSState 自愈）: %v", rbErr))
 			}
 			return &crsReloadError{cause: fmt.Errorf("重载 Caddy: %w", err)}
 		}
@@ -330,7 +330,7 @@ func (m *CRSUpdateManager) downloadAndInstall(parent context.Context, tag string
 		// 未挂载 /app/waf 的部署在容器重建后会回退到镜像/旧快照版本——仅进
 		// 组件日志会让运维在重建前毫无察觉，写一条操作日志使降级状态可见
 		//（重建后 ReconcileCRSState 的版本校正另有审计）。
-		writeCRSUpdateLog("ERROR", string(CRSStatusFailed), fmt.Sprintf("规则快照持久化失败: %v（容器重建后将回退，请检查数据卷磁盘空间）", err))
+		WriteCRSUpdateLog("ERROR", string(CRSStatusFailed), fmt.Sprintf("规则快照持久化失败: %v（容器重建后将回退，请检查数据卷磁盘空间）", err))
 		RecordAuditLog("system", "写入失败", "CRS规则库", FormatAuditDetail(fmt.Sprintf("版本：%s 规则快照持久化失败: %v（容器重建后将回退到镜像捆绑版本）", tag, err), AuditResultPart("failed")), "")
 	}
 	return nil
@@ -391,7 +391,7 @@ func (m *CRSUpdateManager) swapCRSTreeFromStaging(staging, setupPath string, pen
 		"UPDATE security_crs_version SET version=?, updated_at=datetime('now') WHERE id=1",
 		tag,
 	); err != nil {
-		writeCRSUpdateLog("WARN", string(CRSStatusReloading), fmt.Sprintf("提前写入版本行失败（稍后重写）: %v", err))
+		WriteCRSUpdateLog("WARN", string(CRSStatusReloading), fmt.Sprintf("提前写入版本行失败（稍后重写）: %v", err))
 	}
 	return prevTag, nil
 }
@@ -525,7 +525,7 @@ func restoreRulesBackup(rulesPath, rulesBak string) {
 			Logf("error", "crs update: failed to remove old rules tree %s: %v", rulesOld, err)
 		}
 	}
-	writeCRSUpdateLog("INFO", string(CRSStatusInstalling), "已从备份恢复规则")
+	WriteCRSUpdateLog("INFO", string(CRSStatusInstalling), "已从备份恢复规则")
 }
 
 // crsRulesProbeFile 是完整 CRS rules 树必然携带的探针文件（crsProbeFile 去掉

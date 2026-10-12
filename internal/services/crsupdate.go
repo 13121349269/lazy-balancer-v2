@@ -240,7 +240,7 @@ func (m *CRSUpdateManager) setStage(status CRSUpdateStatus, message string) {
 		// U2-66-05：跳过语义用 WARN（对齐威胁族 AppendThreatUpdateLog WARN skipped）。
 		level = "WARN"
 	}
-	writeCRSUpdateLog(level, string(status), message)
+	WriteCRSUpdateLog(level, string(status), message)
 }
 
 // updateRunStillMaster 运行中角色复核（F-L2-68-01 demote 在途中止判定）——
@@ -334,7 +334,7 @@ func (m *CRSUpdateManager) run(trigger string, rc *taskengine.RunContext) {
 		}
 		return ferr
 	}, func(nextAttempt int, wait time.Duration, rerr error) {
-		writeCRSUpdateLog("WARN", "retry", fmt.Sprintf("查询 CRS 最新版本失败: %v；等待 %s 重试，第 %d 次，共 %d 次", rerr, wait, nextAttempt, updateMaxAttempts))
+		WriteCRSUpdateLog("WARN", "retry", fmt.Sprintf("查询 CRS 最新版本失败: %v；等待 %s 重试，第 %d 次，共 %d 次", rerr, wait, nextAttempt, updateMaxAttempts))
 	})
 	if err != nil {
 		// F-L2-68-01：runCtx 取消且已非主节点=demote 在途中止——落 skipped
@@ -347,13 +347,13 @@ func (m *CRSUpdateManager) run(trigger string, rc *taskengine.RunContext) {
 		m.advanceSlotIfAuto(trigger)
 		return
 	}
-	writeCRSUpdateLog("INFO", string(CRSStatusChecking), fmt.Sprintf("最新版本 %s，当前版本 %s", tag, currentCRSVersion()))
+	WriteCRSUpdateLog("INFO", string(CRSStatusChecking), fmt.Sprintf("最新版本 %s，当前版本 %s", tag, currentCRSVersion()))
 
 	// CRS-1(第 5 轮审计 P2):tag < current 时也跳过(防静默降级)——
 	// 此前仅精确相等跳过,捆绑版本 > 远端最新(如上游 release 被删/转 pre)时
 	// 无条件 downloadAndInstall 降级为更旧树,与 UI IsLatest(<=0 即最新)语义相悖。
 	if cmp, cmpErr := CompareCRSVersions(tag, currentCRSVersion()); cmpErr == nil && cmp <= 0 {
-		writeCRSUpdateLog("INFO", string(CRSStatusSuccess), "已是最新版本，无需更新")
+		WriteCRSUpdateLog("INFO", string(CRSStatusSuccess), "已是最新版本，无需更新")
 		if _, err := db.DB.Exec(
 			// 排程槽——手动触发不得改变下一次预约执行时间；现存未来槽不被回拨。
 			"UPDATE security_crs_version SET update_status='success', message='已是最新版本', finished_at=datetime('now'), consecutive_failures=0, "+versionTableSlotAdvanceSQL+" WHERE id=1",
@@ -387,7 +387,7 @@ func (m *CRSUpdateManager) run(trigger string, rc *taskengine.RunContext) {
 		}
 		return installErr
 	}, func(nextAttempt int, wait time.Duration, rerr error) {
-		writeCRSUpdateLog("WARN", "retry", fmt.Sprintf("下载安装 CRS %s 失败: %v；等待 %s 重试，第 %d 次，共 %d 次", tag, rerr, wait, nextAttempt, updateMaxAttempts))
+		WriteCRSUpdateLog("WARN", "retry", fmt.Sprintf("下载安装 CRS %s 失败: %v；等待 %s 重试，第 %d 次，共 %d 次", tag, rerr, wait, nextAttempt, updateMaxAttempts))
 	})
 	if installErr != nil {
 		// F-L2-68-01：同上方 fetch 分支——demote 在途中止落 skipped（不 restore：
@@ -412,7 +412,7 @@ func (m *CRSUpdateManager) run(trigger string, rc *taskengine.RunContext) {
 	m.state.message = ""
 	m.state.finishedAt = time.Now().UTC()
 	m.mu.Unlock()
-	writeCRSUpdateLog("INFO", string(CRSStatusSuccess), fmt.Sprintf("CRS 已更新到 %s", tag))
+	WriteCRSUpdateLog("INFO", string(CRSStatusSuccess), fmt.Sprintf("CRS 已更新到 %s", tag))
 	// 复审裁定 3：清理 M24 之前版本残留在 live 目录的瞬态工件（仅更新成功后执行）
 	m.cleanupLegacyCRSTransient()
 }
@@ -471,7 +471,7 @@ func (m *CRSUpdateManager) fail(cause error, restore bool) {
 	m.state.message = cause.Error()
 	m.state.finishedAt = time.Now().UTC()
 	m.mu.Unlock()
-	writeCRSUpdateLog("ERROR", string(CRSStatusFailed), cause.Error())
+	WriteCRSUpdateLog("ERROR", string(CRSStatusFailed), cause.Error())
 }
 
 // downloadTarballLogged 包装下载 seam 写更新日志（R57）：开始行由下载函数的
@@ -480,7 +480,7 @@ func (m *CRSUpdateManager) fail(cause error, restore bool) {
 // Content-Length 已知时附预计大小；进度行经节流闭包按 10%（总量已知）/5MB
 // （未知）步进；完成行记录落盘字节与耗时。stage 沿用下载阶段的 downloading。
 func (m *CRSUpdateManager) downloadTarballLogged(ctx context.Context, tag, destPath string) error {
-	logLine := func(message string) { writeCRSUpdateLog("INFO", string(CRSStatusDownloading), message) }
+	logLine := func(message string) { WriteCRSUpdateLog("INFO", string(CRSStatusDownloading), message) }
 	startedAt := time.Now()
 	progress := newDownloadProgressLogger(crsTarballSourceURL(tag), logLine)
 	if err := m.downloadTarball(ctx, tag, destPath, progress); err != nil {

@@ -124,8 +124,6 @@ func TestMFARecoveryCodes_singleUse(t *testing.T) {
 	}
 }
 
-// —— 锁定：全局开关门控 ——
-
 // —— 绑定流程：pending → activate ——
 
 func TestMFASetupActivateFlow(t *testing.T) {

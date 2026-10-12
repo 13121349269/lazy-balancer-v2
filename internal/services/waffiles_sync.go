@@ -70,7 +70,7 @@ func BuildWafFileRef() *models.ClusterWafFilesRef {
 	if v, err := os.ReadFile(filepath.Join(crsLiveDir, "VERSION")); err == nil {
 		ref.CRSVersion = strings.TrimSpace(string(v))
 	}
-	if sum := fileSha256(ip2regionLivePath); sum != "" {
+	if sum, err := sha256File(ip2regionLivePath); err == nil && sum != "" {
 		ref.IP2RegionSha = sum
 		seen = true
 	}
@@ -101,7 +101,7 @@ func scanThreatFastFiles() map[string]string {
 		if source == "" {
 			continue
 		}
-		if sum := fileSha256(path); sum != "" {
+		if sum, err := sha256File(path); err == nil && sum != "" {
 			result[source] = sum
 		}
 	}
@@ -143,7 +143,7 @@ func BuildWafFileBundle() *WafFileBundle {
 	for source := range ref.ThreatSha256s {
 		fastPath := filepath.Join(wafDir, fmt.Sprintf("threat-%s.iplist.fast", source))
 		if data, err := os.ReadFile(fastPath); err == nil {
-			// U2-P5-08a：哈希直接对内存字节计算——fileSha256(fastPath) 的
+			// U2-P5-08a：哈希直接对内存字节计算——sha256File(fastPath) 的
 			// 二次读盘既浪费一次 IO，又在主端调度器并发重写 .fast 时留下
 			// TOCTOU 窗口（Sha256 与 Content 可能取自不同时刻的两份文件）。
 			sum := sha256.Sum256(data)
@@ -191,8 +191,12 @@ func wafFilesRefDiffers(r *models.ClusterWafFilesRef) bool {
 			return true
 		}
 	}
-	if r.IP2RegionSha != "" && fileSha256(ip2regionLivePath) != r.IP2RegionSha {
-		return true
+	if r.IP2RegionSha != "" {
+		// SEC-A-1：读失败按哈希不符处理（触发重拉自愈，方向安全）。
+		sum, err := sha256File(ip2regionLivePath)
+		if err != nil || sum != r.IP2RegionSha {
+			return true
+		}
 	}
 	return false
 }
@@ -273,7 +277,9 @@ func ApplyWafFileBundle(bundle *WafFileBundle) (crsChanged, xdbChanged, threatCh
 		if bundle.IP2RegionSha == "" {
 			return crsChanged, xdbChanged, threatChanged, errors.New("同步 IP2Region数据库缺少声明哈希，已拒绝落盘")
 		}
-		liveSum := fileSha256(ip2regionLivePath)
+		// SEC-A-1：读失败时 liveSum 为空串，恒不等于非空声明哈希（上方已拒
+		// 空声明），落入重写路径——方向安全，与威胁分支同口径。
+		liveSum, _ := sha256File(ip2regionLivePath)
 		// R57 A-#4：xdb 未变化也要校验/补写 .version——.version 丢失或写失败
 		// 会让本地 ref 的 tag 为空，wafFilesDrifted 每轮误判漂移且全量重拉
 		// 走不到本分支的自愈（重拉时 sha 相同），从节点永久假警报。
@@ -318,9 +324,18 @@ func ApplyWafFileBundle(bundle *WafFileBundle) (crsChanged, xdbChanged, threatCh
 			return crsChanged, xdbChanged, threatChanged, fmt.Errorf("同步威胁库 %s 哈希不匹配（声明 %s，实际 %s），已拒绝落盘", tf.Name, tf.Sha256, got)
 		}
 		fastPath := filepath.Join(wafDir, fmt.Sprintf("threat-%s.iplist.fast", tf.Name))
-		if fileSha256(fastPath) == tf.Sha256 {
+		// SEC-A-1：读哈希失败按哈希不符处理走重写路径（方向安全）；文件缺失
+		// 是新从节点常态不告警，其余读失败 warn 留痕。
+		if liveSum, sumErr := sha256File(fastPath); sumErr != nil {
+			if !errors.Is(sumErr, os.ErrNotExist) {
+				Logf("warn", "威胁库 .fast %s 本地哈希读取失败（按哈希不符重写落盘）: %v", tf.Name, sumErr)
+			}
+		} else if liveSum == tf.Sha256 {
 			continue // 哈希一致跳过
 		}
+		// SEC-A-3：changed 标志先置后写——后续写失败时函数整体携 error 返回，
+		// 两个调用方（cluster_apply 的 aerr 分支 / lbbak 导入）err 路径均不
+		// 消费 changed 标志，无需逐 err 路径置回。
 		threatChanged = true
 		tmp := fastPath + ".tmp"
 		if err := os.WriteFile(tmp, tf.Content, 0644); err != nil {
@@ -587,15 +602,6 @@ func restoreWafTreeFromBackup(backup, destDir string) error {
 		return fmt.Errorf("从备份恢复旧树: %w", restoreErr)
 	}
 	return nil
-}
-
-func fileSha256(path string) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])
 }
 
 // fetchWafFiles pulls the full file bundle from the master's on-demand

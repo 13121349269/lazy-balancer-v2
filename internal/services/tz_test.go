@@ -49,14 +49,11 @@ func TestTimezoneRefresh_stops_and_waits_when_context_is_canceled(t *testing.T) 
 
 	// When
 	cancel()
+
+	// Then: <-done 返回即证明循环已停止且等待闭合（阻塞则测试超时失败；
+	// SYS-T3 第 72 轮：原 <-done 之后的 select-default 分支恒不可达，已删）。
 	<-done
 
-	// Then
-	select {
-	case <-done:
-	default:
-		t.Fatal("timezone refresh did not stop")
-	}
 	t.Cleanup(func() { StartTimezoneRefresh(context.Background()) })
 }
 

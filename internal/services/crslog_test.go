@@ -9,17 +9,17 @@ import (
 	"lazy-balancer-v2/internal/taskengine"
 )
 
-// R63-P2-2/P2-3：旧 crs-update.log 已退役——writeCRSUpdateLog 唯一落点=
-// tasks/crs.log（tee 单点）。本钉测双守卫：①经 Append* 包装（曾双写）恰 1 行；
-// ②旧文件不再产生。
+// R63-P2-2/P2-3：旧 crs-update.log 已退役——WriteCRSUpdateLog 唯一落点=
+// tasks/crs.log（tee 单点；SEC-C-1 第 72 轮收敛后写口导出、无 Append* 别名）。
+// 本钉测双守卫：①单点写入口径（曾双写）恰 1 行/次；②旧文件不再产生。
 func TestWriteCRSUpdateLog_singleSinkNoDoubleTee(t *testing.T) {
 	dir := t.TempDir()
 	taskengine.SetLogDir(dir)
 	t.Cleanup(func() { taskengine.SetLogDir("") })
 
-	// When: Append 包装层写一条（R62 修复前此处会双 tee）
-	AppendCRSUpdateLog("INFO", "sync", "集群同步回放规则库")
-	AppendCRSUpdateLog("INFO", "sync", "集群同步回放规则库")
+	// When: 唯一写口写一条（R62 修复前经包装层会双 tee）
+	WriteCRSUpdateLog("INFO", "sync", "集群同步回放规则库")
+	WriteCRSUpdateLog("INFO", "sync", "集群同步回放规则库")
 
 	data, _ := os.ReadFile(taskengine.TaskLogPath("crs"))
 	content := string(data)

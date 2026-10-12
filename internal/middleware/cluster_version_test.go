@@ -1089,6 +1089,10 @@ func TestClusterVersionTrigger_threatConsecutiveFailuresExcluded(t *testing.T) {
 // （主端导出 SELECT 与从端 INSERT 均携带），OF 漏列则单列 UPDATE 不 bump
 // cluster_version → 快照缓存恒命中旧指纹 → 从端 304 循环，该列稳态永不传播
 // （R72 F-4 MFA 列事故同型）。每步只写目标单列，钉该列自身的 OF 成员资格。
+// SYSMW-72-A（第 72 轮审计）：NTLM 两列（lb_rules.ntlm_compatible/
+// upstream_force_http1，快照同步面列）补入 steps——900 字符单行 OF 清单无
+// 绊线，未来重构丢列会让 NTLM 切换在从节点稳态永不传播（基线钉测试：列
+// 已在 OF 内，钉既有正确行为）。
 func TestClusterVersionTriggers_bumpForRuleSurfaceNewColumns(t *testing.T) {
 	database := newClusterVersionTestDB(t)
 	if err := installClusterVersionTriggers(database); err != nil {
@@ -1110,7 +1114,8 @@ func TestClusterVersionTriggers_bumpForRuleSurfaceNewColumns(t *testing.T) {
 		name string
 		stmt string
 	}{
-		{"lb_rules.health_check_host", `UPDATE lb_rules SET health_check_host='probe.example.test' WHERE caddy_id='lb_newcol'`},
+		{"lb_rules.ntlm_compatible", `UPDATE lb_rules SET ntlm_compatible=1 WHERE caddy_id='lb_newcol'`},
+		{"lb_rules.upstream_force_http1", `UPDATE lb_rules SET upstream_force_http1=1 WHERE caddy_id='lb_newcol'`},
 		{"upstreams.origin_domain", `UPDATE upstreams SET origin_domain='origin.example.test' WHERE rule_id='lb_newcol'`},
 		{"path_rules.upstream_path", `UPDATE path_rules SET upstream_path='/v2' WHERE rule_id='lb_newcol'`},
 		{"path_rules.response_mode", `UPDATE path_rules SET response_mode='static' WHERE rule_id='lb_newcol'`},

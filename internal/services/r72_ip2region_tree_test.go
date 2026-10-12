@@ -1,9 +1,51 @@
 package services
 
 import (
+	"encoding/binary"
 	"os"
+	"path/filepath"
 	"testing"
+	"time"
 )
+
+// SEC-C-5（第 72 轮审计）：regionTreeFromXDB 段索引遍历此前用 uint32 ptr——
+// 带外 ≥4GB 假 xdb（管理面导入/手工替换可达）header EndIndexPtr 近 2^32 时
+// ptr += 14 回绕，扫描永不终止。修复：int64 运算 + 文件大小上界钳制。
+func TestRegionTreeFromXDB_ptrOverflowTerminates(t *testing.T) {
+	// Given：稀疏假 xdb——header 声明段区 [0xFFFFFFF0, 0xFFFFFFFF]，文件
+	// 恰好覆盖该区间（4GB+16 稀疏占位，不写真实段数据）
+	dir := t.TempDir()
+	path := filepath.Join(dir, "fake.xdb")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	header := make([]byte, 256)
+	binary.LittleEndian.PutUint32(header[8:], 0xFFFFFFF0)
+	binary.LittleEndian.PutUint32(header[12:], 0xFFFFFFFF)
+	if _, err := f.WriteAt(header, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(0x100000010); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// When：扫描（旧 uint32 实现在 ptr += 14 回绕后永不返回）
+	done := make(chan struct{})
+	go func() {
+		regionTreeFromXDB(path)
+		close(done)
+	}()
+	select {
+	case <-done:
+		// Then：终止即契约（钳制后仅 3 次迭代即越界停止）
+	case <-time.After(5 * time.Second):
+		t.Fatal("regionTreeFromXDB 未在 5s 内返回——uint32 ptr 回绕致扫描不终止")
+	}
+}
 
 // R72 二十三次：xdb 段索引全量扫描的省→城市树契约（用生产容器同版 v3.17.0
 // xdb；缺失时跳过——本地开发可能无库）。

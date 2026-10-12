@@ -207,7 +207,7 @@ func (m *IP2RegionUpdateManager) setStage(status IP2RegionUpdateStatus, message 
 		// U2-67-01：跳过语义用 WARN（镜像 CRS 侧 U2-66-05，对齐威胁族 WARN skipped）。
 		level = "WARN"
 	}
-	writeIP2RegionUpdateLog(level, string(status), message)
+	WriteIP2RegionUpdateLog(level, string(status), message)
 }
 
 // run executes the full update pipeline synchronously.
@@ -294,7 +294,7 @@ func (m *IP2RegionUpdateManager) run(trigger string, rc *taskengine.RunContext) 
 		}
 		return ferr
 	}, func(nextAttempt int, wait time.Duration, rerr error) {
-		writeIP2RegionUpdateLog("WARN", "retry", fmt.Sprintf("查询 ip2region 最新版本失败: %v；等待 %s 重试，第 %d 次，共 %d 次", rerr, wait, nextAttempt, updateMaxAttempts))
+		WriteIP2RegionUpdateLog("WARN", "retry", fmt.Sprintf("查询 ip2region 最新版本失败: %v；等待 %s 重试，第 %d 次，共 %d 次", rerr, wait, nextAttempt, updateMaxAttempts))
 	})
 	if err != nil {
 		// F-L2-68-01：runCtx 取消且已非主节点=demote 在途中止——落 skipped
@@ -307,7 +307,7 @@ func (m *IP2RegionUpdateManager) run(trigger string, rc *taskengine.RunContext) 
 		m.advanceSlotIfAuto(trigger)
 		return
 	}
-	writeIP2RegionUpdateLog("INFO", string(IP2RegionStatusChecking), fmt.Sprintf("最新版本 %s，当前版本 %s", tag, currentIP2RegionVersion()))
+	WriteIP2RegionUpdateLog("INFO", string(IP2RegionStatusChecking), fmt.Sprintf("最新版本 %s，当前版本 %s", tag, currentIP2RegionVersion()))
 
 	// SEC42-1（第 42 轮审计）：与 CRS 同口径（crsupdate.go，CRS-1）——tag 不新于
 	// current（cmp<=0）即按「已是最新」跳过，防上游 release 回退/删除时静默降级
@@ -319,7 +319,7 @@ func (m *IP2RegionUpdateManager) run(trigger string, rc *taskengine.RunContext) 
 		if err := rewriteVersionIfMissingOrStale(ip2regionLivePath+".version", tag); err != nil {
 			Logf("error", "ip2region update: failed to refresh .version sidecar at latest: %v", err)
 		}
-		writeIP2RegionUpdateLog("INFO", string(IP2RegionStatusSuccess), "已是最新版本，无需更新")
+		WriteIP2RegionUpdateLog("INFO", string(IP2RegionStatusSuccess), "已是最新版本，无需更新")
 		if _, err := db.DB.Exec(
 			// 排程槽生命周期（2026-10-11 用户裁定）：仅 auto 且现存槽空/过期才推进——手动触发不动预约、未来槽不回拨。
 			"UPDATE security_ip2region_version SET update_status='success', message='已是最新版本', finished_at=datetime('now'), consecutive_failures=0, "+versionTableSlotAdvanceSQL+" WHERE id=1",
@@ -351,7 +351,7 @@ func (m *IP2RegionUpdateManager) run(trigger string, rc *taskengine.RunContext) 
 		}
 		return installErr
 	}, func(nextAttempt int, wait time.Duration, rerr error) {
-		writeIP2RegionUpdateLog("WARN", "retry", fmt.Sprintf("下载安装 ip2region %s 失败: %v；等待 %s 重试，第 %d 次，共 %d 次", tag, rerr, wait, nextAttempt, updateMaxAttempts))
+		WriteIP2RegionUpdateLog("WARN", "retry", fmt.Sprintf("下载安装 ip2region %s 失败: %v；等待 %s 重试，第 %d 次，共 %d 次", tag, rerr, wait, nextAttempt, updateMaxAttempts))
 	})
 	if installErr != nil && !errors.Is(installErr, errIP2RegionReload) {
 		// F-L2-68-01：同上方 fetch 分支——demote 在途中止落 skipped（不回滚
@@ -459,7 +459,7 @@ func (m *IP2RegionUpdateManager) run(trigger string, rc *taskengine.RunContext) 
 	m.state.version = tag
 	m.state.finishedAt = time.Now().UTC()
 	m.mu.Unlock()
-	writeIP2RegionUpdateLog("INFO", string(IP2RegionStatusSuccess), fmt.Sprintf("ip2region 已更新到 %s", tag))
+	WriteIP2RegionUpdateLog("INFO", string(IP2RegionStatusSuccess), fmt.Sprintf("ip2region 已更新到 %s", tag))
 }
 
 // advanceSlotIfAuto 落定推进排程槽（排程槽生命周期，2026-10-11 用户裁定）：
@@ -486,7 +486,7 @@ func (m *IP2RegionUpdateManager) fail(cause error) {
 	m.state.message = cause.Error()
 	m.state.finishedAt = time.Now().UTC()
 	m.mu.Unlock()
-	writeIP2RegionUpdateLog("ERROR", string(IP2RegionStatusFailed), cause.Error())
+	WriteIP2RegionUpdateLog("ERROR", string(IP2RegionStatusFailed), cause.Error())
 }
 
 // downloadAndInstall downloads, validates and atomically swaps in the new xdb.
@@ -577,7 +577,7 @@ func (m *IP2RegionUpdateManager) downloadAndInstall(parent context.Context, tag 
 // Content-Length 已知时附预计大小；进度行按 10%/5MB 节流步进；完成行记录落盘
 // 字节与耗时。stage 沿用下载阶段的 downloading。
 func (m *IP2RegionUpdateManager) downloadXDBLogged(ctx context.Context, tag, destPath string) error {
-	logLine := func(message string) { writeIP2RegionUpdateLog("INFO", string(IP2RegionStatusDownloading), message) }
+	logLine := func(message string) { WriteIP2RegionUpdateLog("INFO", string(IP2RegionStatusDownloading), message) }
 	startedAt := time.Now()
 	progress := newDownloadProgressLogger(ip2RegionXDBSourceURL(tag), logLine)
 	if err := m.downloadXDB(ctx, tag, destPath, progress); err != nil {
@@ -716,7 +716,7 @@ func (m *IP2RegionUpdateManager) successAfterReloadFailOpen(tag string, reloadEr
 	m.state.version = tag
 	m.state.finishedAt = time.Now().UTC()
 	m.mu.Unlock()
-	writeIP2RegionUpdateLog("INFO", string(IP2RegionStatusSuccess), fmt.Sprintf("ip2region 已更新到 %s（%s）", tag, warn))
+	WriteIP2RegionUpdateLog("INFO", string(IP2RegionStatusSuccess), fmt.Sprintf("ip2region 已更新到 %s（%s）", tag, warn))
 }
 
 // validateIP2RegionXDB opens the staged xdb and performs a probe search.

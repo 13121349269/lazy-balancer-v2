@@ -204,3 +204,35 @@ func TestDeleteCertJob_restore_skips_when_row_left_disabled(t *testing.T) {
 		t.Fatalf("status=%q, want queued（行已移离 disabled，恢复不得覆写）", status)
 	}
 }
+
+// SYS-F2（第 72 轮 P4）：ListCertificates 单行 Scan 失败此前静默丢行——与同
+// 函数 rows.Err() 500 口径及 F-CORE-2「warn 留痕+continue」口径不对称。
+// 修复：warn+continue。钉：单行 scan 失败 → warn 留痕 + 不 500 + 其余行照常返回。
+func TestListCertificates_scanFailureWarnsAndKeepsRemainingRows(t *testing.T) {
+	// Given：假驱动首行 id 列类型错误（Scan 必然失败），次行正常
+	h := newBackupTestHandlers(t)
+	fakeDB(t, map[string]driver.Rows{
+		"FROM cert_jobs": &fakeQueryRows{values: [][]driver.Value{
+			{"bad-id", "lb_bad", "bad.example.test", "ok", "", "", ""},
+			{int64(2), "lb_good", "good.example.test", "ok", "", "", ""},
+		}},
+	})
+	buf := captureLog(t)
+	router := gin.New()
+	router.GET("/certificates", h.ListCertificates)
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/certificates", nil))
+
+	// Then：200 + 其余行返回 + warn 留痕
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200（单行 scan 失败不得拖垮整列表）", response.Code, response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "bad.example.test") || !strings.Contains(response.Body.String(), "good.example.test") {
+		t.Fatalf("body=%s, want 失败行跳过、正常行保留", response.Body.String())
+	}
+	if !strings.Contains(buf.String(), "WARNING") || !strings.Contains(buf.String(), "证书") {
+		t.Fatalf("log=%q, want 单行 scan 失败 warn 留痕", buf.String())
+	}
+}

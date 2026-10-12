@@ -309,8 +309,12 @@ func TestOIDCCallback_full_flow_jit(t *testing.T) {
 	// 断言用户:独立行,auth_provider=oidc,role=user,用户名去重
 	var provider, role, username string
 	var cnt int
-	db.DB.QueryRow("SELECT auth_provider, role, username FROM users WHERE auth_provider='oidc'").Scan(&provider, &role, &username)
-	db.DB.QueryRow("SELECT COUNT(*) FROM users WHERE username IN ('oidcalice','oidcalice-2')").Scan(&cnt)
+	if err := db.DB.QueryRow("SELECT auth_provider, role, username FROM users WHERE auth_provider='oidc'").Scan(&provider, &role, &username); err != nil {
+		t.Fatalf("read oidc user row: %v", err)
+	}
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM users WHERE username IN ('oidcalice','oidcalice-2')").Scan(&cnt); err != nil {
+		t.Fatalf("count oidcalice rows: %v", err)
+	}
 	if provider != "oidc" || role != "user" {
 		t.Fatalf("JIT user must be independent oidc row with default role, got provider=%q role=%q", provider, role)
 	}
@@ -319,7 +323,9 @@ func TestOIDCCallback_full_flow_jit(t *testing.T) {
 	}
 	// 本地用户未被污染(仍 admin,无 oidc 关联)
 	var localRole, localProvider string
-	db.DB.QueryRow("SELECT role, COALESCE(auth_provider,'local') FROM users WHERE username='oidcalice' AND auth_provider!='oidc'").Scan(&localRole, &localProvider)
+	if err := db.DB.QueryRow("SELECT role, COALESCE(auth_provider,'local') FROM users WHERE username='oidcalice' AND auth_provider!='oidc'").Scan(&localRole, &localProvider); err != nil {
+		t.Fatalf("read local user row: %v", err)
+	}
 	if localRole != "admin" || localProvider != "local" {
 		t.Fatalf("local user must be untouched: role=%q provider=%q", localRole, localProvider)
 	}
@@ -358,7 +364,9 @@ func TestOIDCCallback_repeat_and_disabled(t *testing.T) {
 		t.Fatalf("first login failed: %d", c)
 	}
 	var cnt int
-	db.DB.QueryRow("SELECT COUNT(*) FROM users WHERE auth_provider='oidc'").Scan(&cnt)
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM users WHERE auth_provider='oidc'").Scan(&cnt); err != nil {
+		t.Fatalf("count oidc users: %v", err)
+	}
 	if cnt != 1 {
 		t.Fatalf("repeat setup: expected 1 oidc user, got %d", cnt)
 	}
@@ -368,7 +376,9 @@ func TestOIDCCallback_repeat_and_disabled(t *testing.T) {
 		t.Fatalf("second login failed: %d", c)
 	}
 	var role string
-	db.DB.QueryRow("SELECT role FROM users WHERE auth_provider='oidc'").Scan(&role)
+	if err := db.DB.QueryRow("SELECT role FROM users WHERE auth_provider='oidc'").Scan(&role); err != nil {
+		t.Fatalf("read oidc role: %v", err)
+	}
 	if role != "admin" {
 		t.Fatalf("role must persist across logins, got %q", role)
 	}
@@ -407,7 +417,11 @@ func TestOIDCCallback_bad_state_rejected(t *testing.T) {
 		t.Fatalf("forged state must redirect to frontend error page, got %d %s", rec.Code, rec.Header().Get("Location"))
 	}
 	var attempts int
-	db.DB.QueryRow("SELECT COALESCE(login_failed_attempts,0) FROM users WHERE auth_provider='oidc'").Scan(&attempts)
+	// 伪造 state 拒绝后 OIDC 用户尚不存在——SUM 聚合恒返回一行（无行=0），
+	// 语义等价于原吞错零值，但查询故障不再静默。
+	if err := db.DB.QueryRow("SELECT COALESCE(SUM(login_failed_attempts),0) FROM users WHERE auth_provider='oidc'").Scan(&attempts); err != nil {
+		t.Fatalf("read lockout counter: %v", err)
+	}
 	if attempts != 0 {
 		t.Fatalf("oidc failures must not feed lockout counter, got %d", attempts)
 	}

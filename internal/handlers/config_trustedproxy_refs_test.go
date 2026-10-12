@@ -124,6 +124,37 @@ func TestUpdateConfig_trustedProxyRefs_rejectsInvalidListEntry(t *testing.T) {
 	}
 }
 
+// SYS-F3（第 72 轮 P5）：总量门此前只挂在 refs 载荷分支——inline-only 更新
+// 时库中既有引用展开不参与合计，「内联 ≤64 + 存量 refs 展开 1999」可破
+// 2000 上限（非对称）。钉：inline 载荷 + 库中存量 refs 超总量组合 → 400；
+// 未超总量 → 200（回归形状）。
+func TestUpdateConfig_trustedProxyInlineOnlyUpdate_countsStoredRefsInTotalCap(t *testing.T) {
+	router := newTrustedProxyRefsRouter(t)
+	// Given: 库中存量 refs 指向 1999 条名单（直插绕过写侧形状门）
+	entries := make([]string, 0, 1999)
+	for i := range 1999 {
+		entries = append(entries, fmt.Sprintf(`{"value":"10.%d.%d.0/24","remark":""}`, i/250, i%250))
+	}
+	listID := seedTrustedRefList(t, "stored-ref-list", "["+strings.Join(entries, ",")+"]")
+	if _, err := db.DB.Exec(`UPDATE global_config SET trusted_proxy_range_refs=? WHERE id=1`, fmt.Sprintf("[%d]", listID)); err != nil {
+		t.Fatal(err)
+	}
+
+	// When: 仅携带 inline ranges（refs 未随载荷），内联 2 条 + 存量展开 1999 > 2000
+	body := `{"source":"caddy","trusted_proxy_ranges":"[\"203.0.113.0/24\",\"198.51.100.0/24\"]"}`
+	if rec := putConfig(t, router, body); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "2000") {
+		t.Fatalf("inline+stored-refs over cap must 400 with 2000 上限, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	// And: 存量 refs 清空后同一 inline 载荷照常 200（回归形状）
+	if _, err := db.DB.Exec(`UPDATE global_config SET trusted_proxy_range_refs='[]' WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	if rec := putConfig(t, router, body); rec.Code != http.StatusOK {
+		t.Fatalf("inline-only under cap must 200, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 // 名单删除被 trusted_proxy_range_refs 引用 → 拒绝删除（参照策略引用守卫）；
 // 解除引用后删除恢复 200。
 func TestDeleteIPList_blockedByTrustedProxyRefs(t *testing.T) {

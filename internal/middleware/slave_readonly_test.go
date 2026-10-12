@@ -477,14 +477,15 @@ func TestJWTAuth_allows_legacy_token_only_for_password_version_zero(t *testing.T
 	}
 }
 
+// ensurePasswordVersionColumn 钉夹具契约：users.password_version 在场。
+// SYSMW-72-C（第 72 轮审计）：现行架构 db.Initialize 建库即含该列
+// （v2.1.8 迁移内联），原 ALTER 补列分支不可达已删——列缺席即夹具错误，
+// 直接失败暴露而非静默修补。
 func ensurePasswordVersionColumn(t *testing.T) {
 	t.Helper()
 	var version int
-	if err := db.DB.QueryRow("SELECT password_version FROM users LIMIT 1").Scan(&version); err == nil || err == sql.ErrNoRows {
-		return
-	}
-	if _, err := db.DB.Exec("ALTER TABLE users ADD COLUMN password_version INTEGER NOT NULL DEFAULT 0"); err != nil {
-		t.Fatalf("add password_version column: %v", err)
+	if err := db.DB.QueryRow("SELECT password_version FROM users LIMIT 1").Scan(&version); err != nil && err != sql.ErrNoRows {
+		t.Fatalf("users.password_version missing: %v", err)
 	}
 }
 

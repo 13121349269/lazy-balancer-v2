@@ -780,8 +780,8 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 		// F65:首次 304(上次有变化本次无变化)时写三类库「无变化」日志——
 		// 与主节点 scheduled update 的 unchanged 日志同构;后续连续 304 静默
 		if !s.lastSyncNoChange {
-			AppendCRSUpdateLog("INFO", "unchanged", "集群同步检查完成，CRS 规则库与主节点一致，无需同步")
-			AppendIP2RegionUpdateLog("INFO", "unchanged", "集群同步检查完成，IP2Region 库与主节点一致，无需同步")
+			WriteCRSUpdateLog("INFO", "unchanged", "集群同步检查完成，CRS 规则库与主节点一致，无需同步")
+			WriteIP2RegionUpdateLog("INFO", "unchanged", "集群同步检查完成，IP2Region 库与主节点一致，无需同步")
 			AppendThreatUpdateLog("INFO", "unchanged", "集群同步检查完成，威胁情报库与主节点一致，无需同步")
 			s.lastSyncNoChange = true
 		}

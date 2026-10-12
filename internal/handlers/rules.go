@@ -1450,6 +1450,18 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		req.BlockPageStage1Status = &tcpZero
 		req.BlockPageStage3ID = &tcpZero
 		req.BlockPageStage3Status = &tcpZero
+		// LBH-A-N1（第 72 轮）：重试窗口是 http/tcp 共用字段（方案 C），http 侧
+		// -1=NTLM 接管态合法；指针合并（nil=沿用存量）会把存量 -1 带进 TCP
+		// 值域门（rule_features.go TCP 分支拒负值）——切换与同协议编辑双路径
+		// 均命中 400 死端，错误指向用户从未提交的字段。负值一律自愈归零
+		// （0=默认 5s 窗口）；非负值尊重 LB-02 指针合并契约（nil=沿用存量/
+		// 显式值=尊重输入，rules_lb_fixes_test 钉测）——不可无条件归零。
+		if req.TCPTryDuration != nil && *req.TCPTryDuration < 0 {
+			req.TCPTryDuration = &tcpZero
+		}
+		if req.TCPTryInterval != nil && *req.TCPTryInterval < 0 {
+			req.TCPTryInterval = &tcpZero
+		}
 	}
 
 	if req.Protocol == "http" && strings.TrimSpace(req.Domain) == "" {
@@ -2441,6 +2453,16 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		rule.ServerTokensHidden = 0
 		rule.NTLMCompatible = 0
 		rule.UpstreamForceHTTP1 = 0
+		// LBH-A-N1 同族（R-12 收敛）：负值重试窗口不喂进复制校验（td/ti 原样
+		// 传入会让直改 DB 残留的 tcp 源行复制即 400 死端），也不放大到副本——
+		// 与 UpdateRule 最终协议 tcp 块负值自愈同格；非负窗口是合法 tcp 配置，
+		// 原样复制（http 源行 td=-1 是 NTLM 接管态，协议原样复制、不受此门）。
+		if rule.TCPTryDuration < 0 {
+			rule.TCPTryDuration = 0
+		}
+		if rule.TCPTryInterval < 0 {
+			rule.TCPTryInterval = 0
+		}
 	}
 
 	userIDInt := contextUserID(c)

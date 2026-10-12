@@ -3,11 +3,8 @@ package services
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
-	"strings"
 	"testing"
 	"time"
 
@@ -59,85 +56,11 @@ func nodeHealth(node *models.ClusterNodeView) *models.ClusterHealth {
 	return node.Health
 }
 
-func TestAutoProvisionZeroSSLEAB_email_is_url_encoded(t *testing.T) {
-	// Given
-	_, database := newClusterTestService(t)
-	if _, err := database.Exec("UPDATE global_config SET acme_email='user+tag@example.com' WHERE id=1"); err != nil {
-		t.Fatalf("seed acme email: %v", err)
-	}
-	var gotForm string
-	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		body, _ := io.ReadAll(request.Body)
-		gotForm = string(body)
-		response.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(response).Encode(map[string]any{"success": true, "eab_kid": "fetched-kid", "eab_hmac_key": "fetched-secret"})
-	}))
-	defer server.Close()
-	defer overrideZeroSSLEABURL(server.URL)()
-	result, err := database.Exec(`INSERT INTO ca_providers (name,provider,directory_url,credentials,max_concurrent,min_interval_ms,enabled) VALUES ('eab','zerossl',?,'',1,1000,1)`, ZeroSSLDirectoryURL)
-	if err != nil {
-		t.Fatalf("seed CA provider: %v", err)
-	}
-	providerID, err := result.LastInsertId()
-	if err != nil {
-		t.Fatalf("read CA provider ID: %v", err)
-	}
-	provider := models.CAProvider{ID: int(providerID), Provider: ProviderZeroSSL, Credentials: ""}
-
-	// When
-	if err := AutoProvisionZeroSSLEAB(context.Background(), &provider); err != nil {
-		t.Fatalf("auto provision EAB: %v", err)
-	}
-
-	// Then：'+' 与 '@' 必须转义，不能以裸 '+' 上送（会被解析成空格）
-	if want := "email=" + url.QueryEscape("user+tag@example.com"); gotForm != want {
-		t.Fatalf("request body=%q, want %q", gotForm, want)
-	}
-	if !strings.Contains(provider.Credentials, "fetched-kid") {
-		t.Fatalf("provider credentials=%q, want fetched EAB", provider.Credentials)
-	}
-}
-
-func TestAutoProvisionZeroSSLEAB_cas_loses_memory_follows_db(t *testing.T) {
-	// Given：并发 worker 已把另一份 EAB 写入 DB，本调用内存中的 credentials 仍是旧的空值
-	_, database := newClusterTestService(t)
-	if _, err := database.Exec("UPDATE global_config SET acme_email='user@example.com' WHERE id=1"); err != nil {
-		t.Fatalf("seed acme email: %v", err)
-	}
-	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		response.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(response).Encode(map[string]any{"success": true, "eab_kid": "fetched-kid", "eab_hmac_key": "fetched-secret"})
-	}))
-	defer server.Close()
-	defer overrideZeroSSLEABURL(server.URL)()
-	const concurrentCredentials = `{"eab_kid":"db-kid","eab_hmac_key":"db-secret"}`
-	result, err := database.Exec(`INSERT INTO ca_providers (name,provider,directory_url,credentials,max_concurrent,min_interval_ms,enabled) VALUES ('eab','zerossl',?,?,1,1000,1)`, ZeroSSLDirectoryURL, concurrentCredentials)
-	if err != nil {
-		t.Fatalf("seed CA provider: %v", err)
-	}
-	providerID, err := result.LastInsertId()
-	if err != nil {
-		t.Fatalf("read CA provider ID: %v", err)
-	}
-	provider := models.CAProvider{ID: int(providerID), Provider: ProviderZeroSSL, Credentials: ""}
-
-	// When
-	if err := AutoProvisionZeroSSLEAB(context.Background(), &provider); err != nil {
-		t.Fatalf("auto provision EAB: %v", err)
-	}
-
-	// Then：CAS 未命中时内存必须回读 DB 实际值，而不是持有未持久化的新值
-	if provider.Credentials != concurrentCredentials {
-		t.Fatalf("memory credentials=%q, want DB value %q", provider.Credentials, concurrentCredentials)
-	}
-	var stored string
-	if err := database.QueryRow("SELECT COALESCE(credentials,'') FROM ca_providers WHERE id=?", providerID).Scan(&stored); err != nil {
-		t.Fatalf("read stored credentials: %v", err)
-	}
-	if stored != concurrentCredentials {
-		t.Fatalf("DB credentials=%q, want unchanged %q", stored, concurrentCredentials)
-	}
-}
+// CLUSTER-2（第 72 轮审计·归类漂移）：ZeroSSL EAB 自动获取测试
+// （TestAutoProvisionZeroSSLEAB_email_is_url_encoded /
+// TestAutoProvisionZeroSSLEAB_cas_loses_memory_follows_db 及
+// overrideZeroSSLEABURL helper）原寄居本文件，已迁证书域 caproviders_test.go
+// （AutoProvisionZeroSSLEAB 实现于 caproviders.go）。
 
 func TestSyncService_Report_failure_audit_throttles_and_resets_on_recovery(t *testing.T) {
 	// Given
@@ -196,10 +119,4 @@ func TestSyncService_Report_failure_audit_throttles_and_resets_on_recovery(t *te
 	if got := countAudit(); got != 2 {
 		t.Fatalf("audit rows after post-recovery failure=%d, want 2", got)
 	}
-}
-
-func overrideZeroSSLEABURL(serverURL string) func() {
-	original := zerosslEABURL
-	zerosslEABURL = serverURL
-	return func() { zerosslEABURL = original }
 }

@@ -392,10 +392,16 @@ func certJobRetryBlocked(status string, updatedAt sql.NullTime, now time.Time) (
 		return false, ""
 	}
 	guard := 2 * time.Minute
+	message := "任务正在执行中，请稍后重试"
 	if status == "queued" {
 		guard = 15 * time.Minute
 	}
-	return now.Sub(updatedAt.Time) < guard, "任务正在执行中，请稍后重试"
+	// CERT-N3（第 72 轮）：downloaded 态签发已完成（证书在库），停在部署
+	// 退避窗口——复用在途文案会误导用户以为签发流程卡住，单列部署口径。
+	if status == "downloaded" {
+		message = "证书已下载完成，正在等待部署生效，请稍后重试"
+	}
+	return now.Sub(updatedAt.Time) < guard, message
 }
 
 // reversedCertJobDomain 交换双域名任务的域名顺序：cert_jobs.domain 存排序

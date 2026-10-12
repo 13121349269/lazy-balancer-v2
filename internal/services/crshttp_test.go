@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"lazy-balancer-v2/internal/taskengine"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -395,5 +396,35 @@ func TestCRSDownloadTarballLogged_startProgressCompletionLines(t *testing.T) {
 	}
 	if !strings.Contains(logContent, string(CRSStatusDownloading)) {
 		t.Fatalf("log lines must use the downloading stage:\n%s", logContent)
+	}
+}
+
+// SEC-C-2（第 72 轮审计）：gitHubAPIToken 读库失败（非 ErrNoRows）此前静默
+// 降级无令牌——与同文件 getGitHubProxyURL「读库故障记日志留痕」口径分裂。
+// 补 warn 后降级可见；行缺失（ErrNoRows）属正常「未配置」不告警。
+func TestGitHubAPIToken_readFailureLogsWarn(t *testing.T) {
+	// Given：global_config 表被改名——读取必失败（非 ErrNoRows 形态）
+	_, database := newClusterTestService(t)
+	if _, err := database.Exec("ALTER TABLE global_config RENAME TO global_config_secc2_bak"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if _, err := database.Exec("ALTER TABLE global_config_secc2_bak RENAME TO global_config"); err != nil {
+			t.Errorf("restore global_config: %v", err)
+		}
+	})
+	var buf strings.Builder
+	oldWriter := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(oldWriter) })
+
+	// When：读取失败降级为空令牌
+	if tok := gitHubAPIToken(); tok != "" {
+		t.Fatalf("token=%q, want empty on read failure", tok)
+	}
+
+	// Then：warn 级留痕（对齐 getGitHubProxyURL 口径）
+	if !strings.Contains(buf.String(), "WARNING:") || !strings.Contains(buf.String(), "GitHub API 令牌") {
+		t.Fatalf("读库失败须 warn 留痕, log:\n%s", buf.String())
 	}
 }

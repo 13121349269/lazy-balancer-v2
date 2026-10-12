@@ -80,6 +80,11 @@ func (h *Handlers) SetClusterMode(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: message})
 }
 
+// requestProtocol 返回本节点自述访问协议，注册时上报主节点（用于拼接该
+// 节点的访问地址与面板展示）。X-Forwarded-Proto 无条件采信——自述协议，
+// 可信度以部署边界为界：伪造该头的可达前提是已通过认证的 admin 管理面，
+// 污染面仅限自家节点的注册地址。CLUSTER-4（第 72 轮审计）：保守维持
+// 现状，不加受信门。
 func requestProtocol(c *gin.Context) string {
 	if c.Request.TLS != nil || strings.EqualFold(c.GetHeader("X-Forwarded-Proto"), "https") {
 		return "https"

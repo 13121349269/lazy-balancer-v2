@@ -113,6 +113,14 @@ func TestIP2RegionUpdateRun_skipWhenSameVersion(t *testing.T) {
 	reloads := 0
 	m.reloader = func() error { reloads++; return nil }
 
+	// SEC-C-N1（R72-27 钉测缺口）：预置 stale sidecar（崩溃遗留形态）——
+	// skip 路径的 rewriteVersionIfMissingOrStale 须把它校正为当前 tag，
+	// 否则 stale tag 无限期不愈。
+	sidecar := ip2regionLivePath + ".version"
+	if err := os.WriteFile(sidecar, []byte("v0.0.1"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
 	// When an update finds the same commit
 	m.run("auto", nil)
 
@@ -129,6 +137,14 @@ func TestIP2RegionUpdateRun_skipWhenSameVersion(t *testing.T) {
 	}
 	if message != "已是最新版本" {
 		t.Fatalf("message=%q, want 已是最新版本", message)
+	}
+	// SEC-C-N1：stale sidecar 已被校正为 fetchLatestTag 同值
+	raw, err := os.ReadFile(sidecar)
+	if err != nil {
+		t.Fatalf("sidecar missing after skip-path refresh: %v", err)
+	}
+	if got := strings.TrimSpace(string(raw)); got != "v3.0.0" {
+		t.Fatalf("sidecar=%q, want v3.0.0（stale 未愈）", got)
 	}
 }
 
@@ -1071,7 +1087,7 @@ func TestWriteIP2RegionUpdateLog_rotatesAtSize(t *testing.T) {
 
 	path := taskengine.TaskLogPath("ip2region")
 	for i := 0; i < 100; i++ {
-		writeIP2RegionUpdateLog("INFO", "checking", "x")
+		WriteIP2RegionUpdateLog("INFO", "checking", "x")
 	}
 
 	// R63-P2-3：写入落 tasks/ip2region.log（轮转归 taskLogsHousekeeping——

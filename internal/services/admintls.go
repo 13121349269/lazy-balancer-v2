@@ -37,9 +37,12 @@ var runtimeAdminTLS atomic.Pointer[adminTLSFingerprint]
 
 func fingerprintAdminTLS(cfg AdminTLSConfig) adminTLSFingerprint {
 	return adminTLSFingerprint{
-		Enabled:     cfg.Enabled,
-		Mode:        cfg.Mode,
-		Certificate: sha256.Sum256([]byte(cfg.Cert + cfg.Key)),
+		Enabled: cfg.Enabled,
+		Mode:    cfg.Mode,
+		// LBH-B-N2（第 72 轮）：\x00 分隔消除 cert/key 无分隔拼接的理论双解
+		// （"A"+"BC" 与 "AB"+"C" 同串同哈希，真实轮换会被误判为未变化）；
+		// PEM 内容不含 NUL，分隔符不引入新的碰撞面。
+		Certificate: sha256.Sum256([]byte(cfg.Cert + "\x00" + cfg.Key)),
 	}
 }
 
@@ -102,9 +105,17 @@ func (c AdminTLSConfig) ResolveCertificate(dataDir string) (tls.Certificate, err
 func selfSignedCert(dataDir string) (tls.Certificate, error) {
 	certPath := filepath.Join(dataDir, "admin_tls.crt")
 	keyPath := filepath.Join(dataDir, "admin_tls.key")
+	// LBH-B-N1（第 72 轮）：先读后验——「双文件可读」不代表是合法证书对；
+	// 存在但损坏的对（截断/换位/垃圾内容）原样上抛会让启动进入崩溃循环且
+	// 面板无清除入口。X509KeyPair 验证通过才复用，否则记 warn 落既有重生成
+	// 路径自愈。
 	if certPEM, err1 := os.ReadFile(certPath); err1 == nil {
 		if keyPEM, err2 := os.ReadFile(keyPath); err2 == nil {
-			return tls.X509KeyPair(certPEM, keyPEM)
+			cert, err3 := tls.X509KeyPair(certPEM, keyPEM)
+			if err3 == nil {
+				return cert, nil
+			}
+			Logf("warn", "管理面板自签名证书对损坏（%s / %s），将重新生成: %v", certPath, keyPath, err3)
 		}
 	}
 

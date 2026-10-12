@@ -36,6 +36,22 @@ func validateTrustedProxyFields(req *models.UpdateConfigRequest) error {
 			return err
 		}
 		*req.TrustedProxyRanges = normalized
+		// 总量门对称面（SYS-F3，第 72 轮 P5）：refs 未随载荷时按库中存量
+		// 引用展开合计——内联面与引用面合并才是真实展开规模（refs 载荷
+		// 分支在下方做同口径判定，此处不重复）。
+		if req.TrustedProxyRangeRefs == nil {
+			inlineCount, err := trustedProxyInlineCount(req)
+			if err != nil {
+				return err
+			}
+			refEntries, err := trustedProxyStoredRefEntries()
+			if err != nil {
+				return err
+			}
+			if inlineCount+refEntries > trustedProxyMaxTotalCIDRs {
+				return fmt.Errorf("受信网段总数超过 %d 上限（内联 %d + 引用展开 %d），请收窄内联范围", trustedProxyMaxTotalCIDRs, inlineCount, refEntries)
+			}
+		}
 	}
 	if req.TrustedProxyRangeRefs != nil {
 		normalized, refEntries, err := normalizeTrustedProxyRangeRefs(*req.TrustedProxyRangeRefs)
@@ -85,6 +101,56 @@ func trustedProxyInlineCount(req *models.UpdateConfigRequest) (int, error) {
 		return 0, nil
 	}
 	return len(entries), nil
+}
+
+// trustedProxyStoredRefEntries 返回库中存量 trusted_proxy_range_refs 的引用
+// 展开条目总数（SYS-F3 总量门对称面：仅更新内联网段时引用面按存量计）。
+// 存量 refs JSON 畸形/引用悬空/条目不可解析（仅见于带外改库）按 0 计——与
+// trustedProxyInlineCount 存量畸形口径一致：总量门不因存量问题拒绝合法的
+// 内联载荷（存量引用的悬空由名单删除守卫与渲染层各自兜底）。
+func trustedProxyStoredRefEntries() (int, error) {
+	var raw string
+	if err := db.DB.QueryRow(`SELECT COALESCE(trusted_proxy_range_refs,'[]') FROM global_config WHERE id=1`).Scan(&raw); err != nil {
+		return 0, fmt.Errorf("读取当前受信代理引用列表失败: %v", err)
+	}
+	var ids []int64
+	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &ids); err != nil || len(ids) == 0 {
+		return 0, nil
+	}
+	total := 0
+	for start := 0; start < len(ids); start += 500 {
+		end := start + 500
+		if end > len(ids) {
+			end = len(ids)
+		}
+		chunk := ids[start:end]
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(chunk)), ",")
+		args := make([]any, len(chunk))
+		for i, id := range chunk {
+			args[i] = id
+		}
+		rows, err := db.DB.Query(`SELECT COALESCE(entries,'[]') FROM security_ip_lists WHERE id IN (`+placeholders+`)`, args...)
+		if err != nil {
+			return 0, fmt.Errorf("读取受信代理引用名单失败: %v", err)
+		}
+		for rows.Next() {
+			var entriesJSON string
+			if err := rows.Scan(&entriesJSON); err != nil {
+				rows.Close()
+				return 0, fmt.Errorf("读取受信代理引用名单失败: %v", err)
+			}
+			var entries []models.IPListEntry
+			if entriesJSON != "" && json.Unmarshal([]byte(entriesJSON), &entries) == nil {
+				total += len(entries)
+			}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("读取受信代理引用名单失败: %v", err)
+		}
+		rows.Close()
+	}
+	return total, nil
 }
 
 // normalizeTrustedProxyRangeRefs 校验并归一引用载荷：空白归一 "[]"；非空

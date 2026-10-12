@@ -67,39 +67,8 @@ func (h *Handlers) UpdateCAProvider(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid request: " + err.Error()})
 		return
 	}
-	var oldName, oldProvider, oldDirectoryURL, oldCredentials string
-	var oldMaxConcurrent, oldMinIntervalMS int
-	var oldEnabled bool
-	if err := db.DB.QueryRow(`SELECT name, provider, directory_url, COALESCE(credentials,''), max_concurrent, min_interval_ms, enabled FROM ca_providers WHERE id=?`, id).Scan(&oldName, &oldProvider, &oldDirectoryURL, &oldCredentials, &oldMaxConcurrent, &oldMinIntervalMS, &oldEnabled); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "CA provider not found"})
-			return
-		}
-		services.Logf("error", "Failed to query CA provider %d: %v", id, err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "查询 CA 提供商失败"})
-		return
-	}
-	changed := []string{}
-	if req.Name != nil && *req.Name != oldName {
-		changed = append(changed, "名称")
-	}
-	if req.Provider != nil && *req.Provider != oldProvider {
-		changed = append(changed, "提供商类型")
-	}
-	if req.Credentials != nil && credentialsMeaningfullyChanged(*req.Credentials, oldCredentials) {
-		changed = append(changed, "凭证")
-	}
-	if req.MaxConcurrent != nil && *req.MaxConcurrent != oldMaxConcurrent {
-		changed = append(changed, "最大并发")
-	}
-	if req.MinIntervalMS != nil && *req.MinIntervalMS != oldMinIntervalMS {
-		changed = append(changed, "最小间隔")
-	}
-	if req.Enabled != nil && *req.Enabled != oldEnabled {
-		changed = append(changed, "启用状态")
-	}
-
-	if err := h.caProviderService.UpdateCAProvider(id, req); err != nil {
+	old, err := h.caProviderService.UpdateCAProvider(id, req)
+	if err != nil {
 		if errors.Is(err, services.ErrCAProviderNotFound) {
 			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "CA provider not found"})
 			return
@@ -131,10 +100,32 @@ func (h *Handlers) UpdateCAProvider(c *gin.Context) {
 		}
 		return
 	}
+	// CERT-N1（第 72 轮）：changed 清单的比对基线改为服务层返回的事务内旧行，
+	// 消除「事务外预读 → 事务提交」窗口内并发写入导致的清单失真（基于陈旧
+	// 旧值漏记/多记变更字段）。
+	changed := []string{}
+	if req.Name != nil && *req.Name != old.Name {
+		changed = append(changed, "名称")
+	}
+	if req.Provider != nil && *req.Provider != old.Provider {
+		changed = append(changed, "提供商类型")
+	}
+	if req.Credentials != nil && credentialsMeaningfullyChanged(*req.Credentials, old.Credentials) {
+		changed = append(changed, "凭证")
+	}
+	if req.MaxConcurrent != nil && *req.MaxConcurrent != old.MaxConcurrent {
+		changed = append(changed, "最大并发")
+	}
+	if req.MinIntervalMS != nil && *req.MinIntervalMS != old.MinIntervalMS {
+		changed = append(changed, "最小间隔")
+	}
+	if req.Enabled != nil && *req.Enabled != old.Enabled {
+		changed = append(changed, "启用状态")
+	}
 	if len(changed) == 0 {
-		recordAudit(c, "更新", "CA提供商", services.FormatAuditDetail(fmt.Sprintf("提供商 %d", id), oldName, "无修改"))
+		recordAudit(c, "更新", "CA提供商", services.FormatAuditDetail(fmt.Sprintf("提供商 %d", id), old.Name, "无修改"))
 	} else {
-		recordAudit(c, "更新", "CA提供商", services.FormatAuditDetail(fmt.Sprintf("提供商 %d", id), oldName, fmt.Sprintf("变更：%s", strings.Join(changed, "、"))))
+		recordAudit(c, "更新", "CA提供商", services.FormatAuditDetail(fmt.Sprintf("提供商 %d", id), old.Name, fmt.Sprintf("变更：%s", strings.Join(changed, "、"))))
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "CA 提供商已更新"})
 }

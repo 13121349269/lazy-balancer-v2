@@ -4,6 +4,7 @@ package services
 // 调度开关（P3-7/U1-P4-2）/证书族角色门（U7-P3-2）。
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +18,12 @@ func newWireTestEngine(t *testing.T) *taskengine.Engine {
 	if err := db.Initialize(t.TempDir()); err != nil {
 		t.Fatalf("initialize test database: %v", err)
 	}
+	// TASK-3（第 72 轮·测试卫生）：注入空载 configLoadRerun——否则
+	// InitTaskEngine 尾部 BootSync（startup:config-load）因钩子 nil 恒落
+	// failed 启动行（「配置重载未接线」），每个夹具用例都携带一行假失败
+	// 残留。与 certJobsActiveFn 注入缝同模式：Cleanup 还原 nil。
+	SetConfigLoadRerun(func(operator string) error { return nil })
+	t.Cleanup(func() { SetConfigLoadRerun(nil) })
 	t.Cleanup(func() {
 		StopTaskEngine()
 		_ = db.Close()
@@ -24,6 +31,20 @@ func newWireTestEngine(t *testing.T) *taskengine.Engine {
 	})
 	// runtimeLogFile 指向临时目录——避免默认 /app/logs 写出测试沙箱
 	return InitTaskEngine("", t.TempDir()+"/app.log")
+}
+
+// TASK-3（第 72 轮·测试卫生）：夹具注入空载 configLoadRerun 后，
+// BootSync 启动行必须落 success——failed 残留形态（钩子 nil「配置重载未
+// 接线」）回归即红。
+func TestTaskEngineWire_bootConfigLoadRowSucceeds(t *testing.T) {
+	te := newWireTestEngine(t)
+	latest := te.LatestRun("startup:config-load")
+	if latest == nil {
+		t.Fatal("BootSync 应落一行 startup:config-load 运行记录")
+	}
+	if latest.Status != "success" {
+		t.Fatalf("夹具启动行应 success（configLoadRerun 已注入空载），得到 status=%s message=%s", latest.Status, latest.Message)
+	}
 }
 
 // TASK-L1（第 69 轮 P1）：全新安装三安全库自动更新永不排程——引擎化后零槽
@@ -150,6 +171,24 @@ func TestTaskEngineWire_PeriodicIntervalAndScheduledSlotPresent(t *testing.T) {
 	}
 	if scheduled != 4 {
 		t.Fatalf("scheduled tasks=%d, want 4（threat/crs/ip2region/auto-backup）", scheduled)
+	}
+}
+
+// TASK-1（第 72 轮）：引擎 Trigger/RunSync 角色门曾只认 Descriptor.MasterOnly
+// bool（三安全库专用），cert 族×5 与 auto-backup 仅声明 RunsOn=RoleMasterOnly
+// ——从节点手动 Trigger 可绕过角色门直跑主节点任务体。收敛为
+// roleAllows(RunsOn) 单机制后钉死拒绝形状。
+// Given 从节点角色引擎。
+// When Trigger cert 族/auto-backup 主节点任务。
+// Then 全部返回「仅允许在主节点执行」，任务体不执行。
+func TestTaskEngineWire_MasterOnlyFamiliesTriggerRejectedOnSlave(t *testing.T) {
+	te := newWireTestEngine(t)
+	te.SetRole(false) // 从节点
+	for _, id := range []string{"cert-renewal-scan", "cert-reconcile", "auto-backup"} {
+		err := te.Trigger(id, "manual", "tester")
+		if err == nil || !strings.Contains(err.Error(), "主节点") {
+			t.Fatalf("从节点 Trigger %s 应被角色门拒绝，得到 err=%v", id, err)
+		}
 	}
 }
 

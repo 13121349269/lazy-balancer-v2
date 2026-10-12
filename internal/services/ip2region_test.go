@@ -4,11 +4,13 @@ import (
 	"encoding/binary"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/taskengine"
 )
 
 // testSegments mirror a production xdb whose fifth region field carries the
@@ -365,5 +367,44 @@ func TestGetIP2RegionEntryCount_readsHeaderBounds(t *testing.T) {
 	// When/Then: 真值 N(header 边界直读)
 	if got := GetIP2RegionEntryCount(); got != n {
 		t.Fatalf("GetIP2RegionEntryCount()=%d, want %d (header bounds)", got, n)
+	}
+}
+
+// SEC-C-6（第 72 轮审计）：writeRegionTreeCache 落盘失败此前静默吞错且仍写
+// INFO「已重建」成功行（日志谎报）。修复后失败写 WARN「重建落盘失败」且
+// 无 INFO 成功行；writeProvincesCache 错误沿返回值上抛给调用点留痕。
+func TestWriteRegionTreeCache_writeFailureLogsWarn(t *testing.T) {
+	// Given：只读目录中的 live 路径——树缓存落盘必失败
+	dir := t.TempDir()
+	roDir := filepath.Join(dir, "ro")
+	if err := os.MkdirAll(roDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	live := filepath.Join(roDir, "ip2region.xdb")
+	if err := os.WriteFile(live, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(roDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(roDir, 0o755) })
+	old := ip2regionLivePath
+	ip2regionLivePath = live
+	t.Cleanup(func() { ip2regionLivePath = old })
+	logDir := t.TempDir()
+	taskengine.SetLogDir(logDir)
+	t.Cleanup(func() { taskengine.SetLogDir("") })
+
+	// When：落盘失败路径
+	writeRegionTreeCache(&IP2RegionRegionTree{Provinces: []string{"海外"}, Cities: map[string][]string{}})
+
+	// Then：WARN「重建落盘失败」留痕，无 INFO 成功行（谎报消除）
+	data, _ := os.ReadFile(taskengine.TaskLogPath("ip2region"))
+	content := string(data)
+	if !strings.Contains(content, "WARN") || !strings.Contains(content, "重建落盘失败") {
+		t.Fatalf("落盘失败须 WARN 留痕, log:\n%s", content)
+	}
+	if strings.Contains(content, "地域树缓存已重建") {
+		t.Fatalf("落盘失败不得写 INFO 成功行（谎报）, log:\n%s", content)
 	}
 }

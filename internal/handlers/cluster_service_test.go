@@ -230,6 +230,30 @@ func TestClusterServiceControl_rejects_invalid_action(t *testing.T) {
 	}
 }
 
+// CLUSTER-3（第 72 轮审计）：解析失败分支的审计动作不得留空段——
+// ShouldBindJSON 失败时 Action 多为零值，此前审计详情落「操作：」空值，
+// 无法区分「动作未知的畸形请求」与记录缺陷。空串以占位符显式留痕。
+func TestClusterServiceControl_parseFailureAuditsPlaceholderAction(t *testing.T) {
+	// Given：从节点服务控制端点
+	setupClusterServiceControlDB(t)
+	_, router := newSlaveTestHandler(&config.Config{})
+
+	// When：畸形 JSON 触发解析失败
+	request := httptest.NewRequest(http.MethodPost, "/service-control", strings.NewReader("{not-json"))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	// Then：400 且审计动作段为占位符而非空串
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", recorder.Code, recorder.Body.String())
+	}
+	details := auditDetailsServiceControlRows(t)
+	if len(details) != 1 || !strings.Contains(details[0], "操作：<解析失败>") || !strings.Contains(details[0], "失败：请求格式错误") {
+		t.Fatalf("audit details=%v, want placeholder action row", details)
+	}
+}
+
 func TestClusterServiceControl_rejects_bad_ticket_without_leaking_it(t *testing.T) {
 	setupClusterServiceControlDB(t)
 	const clusterToken = "lb_cluster_ctl-bad"

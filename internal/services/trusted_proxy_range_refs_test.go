@@ -99,6 +99,8 @@ func TestTrustedProxyRender_missingRefListContributesZero(t *testing.T) {
 // 重载联动门（威胁库门同款 fail-safe）：IP 名单内容变化时若被
 // trusted_proxy_range_refs 引用 → 触发配置重载（true）；未引用 → false；
 // refs JSON 解析失败按被引用处理（宁可多一次重载，不欠渲染收敛）。
+// RV72-N3：以上均以 trusted_proxy_enabled=1 为前提（停用形态见
+// TestTrustedListsReferencedByTrustedProxy_disabledGate）。
 func TestTrustedListsReferencedByTrustedProxy_gate(t *testing.T) {
 	overrideWafDirForTest(t)
 	newClusterTestService(t)
@@ -111,7 +113,7 @@ func TestTrustedListsReferencedByTrustedProxy_gate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.DB.Exec(`UPDATE global_config SET trusted_proxy_range_refs=? WHERE id=1`, "["+jsonInt(listID)+"]"); err != nil {
+	if _, err := db.DB.Exec(`UPDATE global_config SET trusted_proxy_enabled=1, trusted_proxy_range_refs=? WHERE id=1`, "["+jsonInt(listID)+"]"); err != nil {
 		t.Fatal(err)
 	}
 	if !trustedListsReferencedByTrustedProxy([]int{int(listID)}) {
@@ -181,6 +183,31 @@ func TestUpdateSnapshotSettings_trustedProxyRangeRefsApplied(t *testing.T) {
 	}
 	if got != "[11]" {
 		t.Fatalf("applied trusted_proxy_range_refs=%q, want [11]", got)
+	}
+}
+
+// RV72-N3（第 72 轮复审）：受信代理重载门须判 trusted_proxy_enabled——
+// 总开关停用且 refs 残留（停用未清空/带外改库形态）时不参与渲染，
+// 名单变化不应触发重载。
+func TestTrustedListsReferencedByTrustedProxy_disabledGate(t *testing.T) {
+	overrideWafDirForTest(t)
+	newClusterTestService(t)
+	// Given：名单被 refs 引用，但 trusted_proxy_enabled=0
+	res, err := db.DB.Exec(`INSERT INTO security_ip_lists (name, entries) VALUES ('cdn-disabled', '[]')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`UPDATE global_config SET trusted_proxy_enabled=0, trusted_proxy_range_refs=? WHERE id=1`, "["+jsonInt(listID)+"]"); err != nil {
+		t.Fatal(err)
+	}
+
+	// When/Then：停用 → false（不触发重载）
+	if trustedListsReferencedByTrustedProxy([]int{int(listID)}) {
+		t.Fatal("trusted_proxy_enabled=0 时 refs 残留不应触发重载（渲染不消费 refs）")
 	}
 }
 

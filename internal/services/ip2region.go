@@ -76,7 +76,9 @@ func InitIP2Region() {
 	if _, err := os.Stat(cachePath); err != nil {
 		provinces := GetIP2RegionProvinces()
 		if data, mErr := json.Marshal(provinces); mErr == nil {
-			writeProvincesCache(cachePath, data)
+			if err := writeProvincesCache(cachePath, data); err != nil {
+				Logf("warn", "ip2region: 省份列表缓存落盘失败（下次启动重建）: %v", err)
+			}
 		}
 	}
 	// R72 二十三次：省→市树缓存（首次装载或缺失时全量扫描重建）。
@@ -125,21 +127,10 @@ func swapIP2RegionSearcher(searcher *ip2regionService.Ip2Region) {
 
 // Lookup returns the alpha-2 country code for the given IP address, or ""
 // when no database is loaded, the IP is unknown, or the region string
-// cannot be parsed.
+// cannot be parsed. SEC-C-4（第 72 轮）：取锁+搜索序列委托 LookupRegion
+// 单点，本函数只做第五段解析。
 func Lookup(ip string) string {
-	ip2regionMu.RLock()
-	searcher := ip2regionSearcher
-	ip2regionMu.RUnlock()
-	if searcher == nil {
-		return ""
-	}
-	ip2regionSearchMu.Lock()
-	region, err := searcher.Search(ip)
-	ip2regionSearchMu.Unlock()
-	if err != nil {
-		return ""
-	}
-	return parseCountryCode(region)
+	return parseCountryCode(LookupRegion(ip))
 }
 
 // LookupRegion returns the raw pipe-separated region string for the IP
@@ -192,7 +183,9 @@ func SetIP2RegionVersion(version string) {
 	}
 	provinces := GetIP2RegionProvinces()
 	if data, err := json.Marshal(provinces); err == nil {
-		writeProvincesCache(ip2regionLivePath+".provinces.json", data)
+		if err := writeProvincesCache(ip2regionLivePath+".provinces.json", data); err != nil {
+			Logf("warn", "ip2region: 省份列表缓存落盘失败（下次重建）: %v", err)
+		}
 	}
 	// R72 二十三次：版本更新即新库——树缓存同步重建。
 	writeRegionTreeCache(regionTreeFromXDB(ip2regionLivePath))
@@ -200,12 +193,14 @@ func SetIP2RegionVersion(version string) {
 
 // writeProvincesCache atomically writes the province JSON cache by writing to a
 // temporary file then renaming, so concurrent readers never see a partial file.
-func writeProvincesCache(path string, data []byte) {
+// SEC-C-6（第 72 轮）：写/换名错误沿返回值上抛——此前静默吞错，调用点
+// 无从留痕。
+func writeProvincesCache(path string, data []byte) error {
 	tmpPath := path + ".tmp"
 	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
-		return
+		return err
 	}
-	os.Rename(tmpPath, path)
+	return os.Rename(tmpPath, path)
 }
 
 // GetCachedProvinces returns the province list from the JSON cache file,
@@ -453,14 +448,24 @@ func regionTreeFromXDB(path string) *IP2RegionRegionTree {
 	if maxPtr <= minPtr {
 		return nil
 	}
-	// 2) 遍历段索引，按 dataPtr 去重读 region。
+	// 2) 遍历段索引，按 dataPtr 去重读 region。SEC-C-5（第 72 轮审计）：
+	// int64 运算 + 文件大小上界钳制——uint32 ptr 在带外 ≥4GB 假 xdb
+	//（EndIndexPtr 近 2^32）下 ptr += 14 回绕、扫描永不终止。
+	fi, err := f.Stat()
+	if err != nil {
+		return nil
+	}
+	end := int64(maxPtr)
+	if sizeBound := fi.Size() - 14; sizeBound < end {
+		end = sizeBound
+	}
 	seg := make([]byte, 14)
 	provinces := map[string]bool{}
 	cities := map[string]map[string]bool{}
 	var droppedASCIIProvinces, droppedASCIICities int
 	seen := map[uint32]bool{}
-	for ptr := minPtr; ptr <= maxPtr; ptr += 14 {
-		if _, err := f.ReadAt(seg, int64(ptr)); err != nil {
+	for ptr := int64(minPtr); ptr <= end; ptr += 14 {
+		if _, err := f.ReadAt(seg, ptr); err != nil {
 			break
 		}
 		dataLen := int(binary.LittleEndian.Uint16(seg[8:10]))
@@ -636,12 +641,17 @@ func writeRegionTreeCache(tree *IP2RegionRegionTree) {
 	if err != nil {
 		return
 	}
-	writeProvincesCache(ip2RegionLivePathForTreeCache(), data)
+	// SEC-C-6（第 72 轮）：落盘失败写 WARN「重建落盘失败」并返回——此前
+	// 静默吞错且仍写下方 INFO「已重建」成功行（日志谎报，排障误导）。
+	if err := writeProvincesCache(ip2RegionLivePathForTreeCache(), data); err != nil {
+		WriteIP2RegionUpdateLog("WARN", "idle", fmt.Sprintf("地域树缓存重建落盘失败（下次重建）: %v", err))
+		return
+	}
 	cityTotal := 0
 	for _, cities := range tree.Cities {
 		cityTotal += len(cities)
 	}
-	writeIP2RegionUpdateLog("INFO", "idle", fmt.Sprintf("地域树缓存已重建：%d 省级 / %d 城市（未映射 ASCII 段已过滤：省 %d / 城市 %d）", len(tree.Provinces), cityTotal, tree.DroppedASCIIProvinces, tree.DroppedASCIICities))
+	WriteIP2RegionUpdateLog("INFO", "idle", fmt.Sprintf("地域树缓存已重建：%d 省级 / %d 城市（未映射 ASCII 段已过滤：省 %d / 城市 %d）", len(tree.Provinces), cityTotal, tree.DroppedASCIIProvinces, tree.DroppedASCIICities))
 }
 
 // ip2AutonomousPrefectures（R72 二十八次，用户反馈：「大理/怒江/凉山缺市字」——

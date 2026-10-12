@@ -373,6 +373,10 @@ func (h *Handlers) AutoBackupSettings(c *gin.Context) {
 		return
 	}
 	var lastRunValue *string
+	if lastRun.Valid {
+		// SYS-F1（第 72 轮 P4）：水位线回传响应面（此前扫描后零消费恒 null）。
+		lastRunValue = &lastRun.String
+	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "ok", Data: gin.H{
 		"enabled": enabled, "frequency": freq, "time": hhmm, "day": day, "keep": keep,
 		"sections": sections, "last_run": lastRunValue, "backups": backups,

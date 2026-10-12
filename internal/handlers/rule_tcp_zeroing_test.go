@@ -215,6 +215,127 @@ func TestUpdateRule_tcpEditHealsHTTPOnlyFieldFamily(t *testing.T) {
 	assertTCPRuleFamilyZeroed(t, "lb_rules 编辑自愈", "caddy_id='lb_tcpfam'")
 }
 
+// LBH-A-N1（第 72 轮 P3）：NTLM 接管态（td=-1，方案 C 库级表达）随
+// http→tcp 切换命中校验死端——指针合并（rules.go nil=沿用存量）把 -1 带进
+// TCP 值域门（rule_features.go TCP 分支拒负值），400 指向用户从未提交的字段，
+// UI 无自救路径。切换路径负值自愈归零（0=默认 5s 窗口）；非负间隔不受波及。
+func TestUpdateRule_switchToTCPHealsNegativeTryDurationFromNTLMState(t *testing.T) {
+	handler := newRuleFeatureTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.PUT("/rules/:caddy_id", handler.UpdateRule)
+
+	// Given：HTTP 行处于 NTLM 接管态（ntlm=1+cookie+td=-1）
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,description,protocol,domain,listen_port,strategy,enabled,ntlm_compatible,tcp_try_duration,tcp_try_interval)
+		VALUES ('lb_ntlmsw','ntlmsw','','http','ntlm.test',18600,'cookie',1,1,-1,250)`); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled,protocol) VALUES ('lb_ntlmsw','up.test',80,1,1,'http')`); err != nil {
+		t.Fatalf("seed upstream: %v", err)
+	}
+
+	// When：切 TCP（不携带 td——合并自存量 -1）
+	request := httptest.NewRequest(http.MethodPut, "/rules/lb_ntlmsw", strings.NewReader(`{"protocol":"tcp"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	// Then：200（修复前 400「重试时长不能为负数」死端）；td 自愈 0、非负 ti 原样保留
+	if response.Code != http.StatusOK {
+		t.Fatalf("switch to tcp: status=%d body=%s", response.Code, response.Body.String())
+	}
+	var tryDuration, tryInterval, ntlm int
+	if err := db.DB.QueryRow(`SELECT COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,0), COALESCE(ntlm_compatible,0) FROM lb_rules WHERE caddy_id='lb_ntlmsw'`).
+		Scan(&tryDuration, &tryInterval, &ntlm); err != nil {
+		t.Fatal(err)
+	}
+	if tryDuration != 0 {
+		t.Fatalf("td=%d, want 0 (NTLM 接管残留自愈)", tryDuration)
+	}
+	if tryInterval != 250 {
+		t.Fatalf("ti=%d, want 250 (非负间隔不归零)", tryInterval)
+	}
+	if ntlm != 0 {
+		t.Fatalf("ntlm_compatible=%d, want 0 (切换归零既有行为)", ntlm)
+	}
+}
+
+// LBH-A-N1 同族第二面：直改 DB/导入残留的 TCP 行携带负值重试窗口——任意
+// 同协议编辑（如改名）同样命中负值门 400。同协议编辑路径负值一并自愈归零
+// （与 LBH-A-U1 死配置自愈同格）；非负值尊重 LB-02 指针合并契约
+// （nil=沿用存量/显式值=尊重输入，rules_lb_fixes_test 钉测）。
+func TestUpdateRule_tcpEditHealsNegativeTryWindowResidue(t *testing.T) {
+	handler := newRuleFeatureTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.PUT("/rules/:caddy_id", handler.UpdateRule)
+
+	// Given：直改 DB 的 TCP 行带 td=-1/ti=-1（修复前无 API 自救路径）
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,description,protocol,domain,listen_port,strategy,enabled,tcp_try_duration,tcp_try_interval)
+		VALUES ('lb_tcpwin','tcpwin','','tcp','',18601,'weighted_round_robin',1,-1,-1)`); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled,protocol) VALUES ('lb_tcpwin','up.test',9000,1,1,'tcp')`); err != nil {
+		t.Fatalf("seed upstream: %v", err)
+	}
+
+	// When：同协议编辑（纯改名，不携带重试窗口字段）
+	request := httptest.NewRequest(http.MethodPut, "/rules/lb_tcpwin", strings.NewReader(`{"name":"tcpwin-renamed","protocol":"tcp"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	// Then：200 且负值残留归零
+	if response.Code != http.StatusOK {
+		t.Fatalf("tcp edit: status=%d body=%s", response.Code, response.Body.String())
+	}
+	var tryDuration, tryInterval int
+	if err := db.DB.QueryRow(`SELECT COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,0) FROM lb_rules WHERE caddy_id='lb_tcpwin'`).
+		Scan(&tryDuration, &tryInterval); err != nil {
+		t.Fatal(err)
+	}
+	if tryDuration != 0 || tryInterval != 0 {
+		t.Fatalf("负值重试窗口未自愈: tcp_try_duration=%d tcp_try_interval=%d, want 0/0", tryDuration, tryInterval)
+	}
+}
+
+// LBH-A-N1 同族（R-12 收敛）：DuplicateRule 把源行 td/ti 原样喂进
+// validateRuleFeatures（rules.go 复制校验）——直改 DB 残留的负值 TCP 源行
+// 复制即 400 死端（与编辑路径同形）；负值不放大到副本，非负窗口原样复制。
+func TestDuplicateRule_tcpCopyHealsNegativeTryWindowResidue(t *testing.T) {
+	handler := newRuleFeatureTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/rules/:caddy_id/duplicate", handler.DuplicateRule)
+
+	// Given：直改 DB 的 TCP 行带 td=-1/ti=-1
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,description,protocol,domain,listen_port,strategy,enabled,tcp_try_duration,tcp_try_interval)
+		VALUES ('lb_tcpwindup','tcpwindup','','tcp','',18602,'weighted_round_robin',1,-1,-1)`); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled,protocol) VALUES ('lb_tcpwindup','up.test',9000,1,1,'tcp')`); err != nil {
+		t.Fatalf("seed upstream: %v", err)
+	}
+
+	// When
+	request := httptest.NewRequest(http.MethodPost, "/rules/lb_tcpwindup/duplicate", nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	// Then：201（修复前复制校验 400 死端）且副本窗口归零
+	if response.Code != http.StatusCreated {
+		t.Fatalf("duplicate: status=%d body=%s", response.Code, response.Body.String())
+	}
+	var tryDuration, tryInterval int
+	if err := db.DB.QueryRow(`SELECT COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,0) FROM lb_rules WHERE name='tcpwindup（副本）'`).
+		Scan(&tryDuration, &tryInterval); err != nil {
+		t.Fatalf("read copy: %v", err)
+	}
+	if tryDuration != 0 || tryInterval != 0 {
+		t.Fatalf("副本负值窗口未归零: tcp_try_duration=%d tcp_try_interval=%d, want 0/0", tryDuration, tryInterval)
+	}
+}
+
 // LBH-A-U1 同族：DuplicateRule 不把源 TCP 行的死配置放大到副本（与
 // CreateRule/UpdateRule 归一同口径，A2-S2 归一块的家族补齐）。
 func TestDuplicateRule_tcpCopyDropsHTTPOnlyFieldFamily(t *testing.T) {

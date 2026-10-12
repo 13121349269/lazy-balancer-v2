@@ -156,7 +156,14 @@ func (h *Handlers) ClusterServiceControl(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, clusterServiceControlMaxBytes)
 	var req models.ClusterServiceControlRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		recordClusterServiceControlAudit(c, req.Action, "失败：请求格式错误")
+		// CLUSTER-3（第 72 轮审计）：解析失败时 Action 多为零值空串，审计
+		// 「操作：」段落空——无法区分「动作未知的畸形请求」。部分绑定成功的
+		// 形态保留实际动作，空串以「<解析失败>」占位符显式留痕。
+		action := req.Action
+		if action == "" {
+			action = "<解析失败>"
+		}
+		recordClusterServiceControlAudit(c, action, "失败：请求格式错误")
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: http.StatusBadRequest, Message: "请求格式错误"})
 		return
 	}

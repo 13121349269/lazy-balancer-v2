@@ -313,18 +313,18 @@ func applyLbbakWafFiles(c *gin.Context, action string, payload *lbbakPayload, ip
 		recordAudit(c, action, "安全数据", services.FormatAuditDetail("规则库数据库(随备份还原/导入)", services.AuditResultPart("success")))
 		// 完整更新流程(与自动更新器同款分阶段流水,来源=lbbak 备份)
 		if xdbChanged {
-			services.AppendIP2RegionUpdateLog("INFO", "installing", "校验并落盘备份内 IP2Region数据库")
+			services.WriteIP2RegionUpdateLog("INFO", "installing", "校验并落盘备份内 IP2Region数据库")
 			if err := services.Reload(); err != nil {
 				services.Logf("error", "lbbak 导入后 ip2region 内存缓存热换失败(下次重启生效): %v", err)
 			}
 			services.RebuildRegionTreeCacheForSync()
-			services.AppendIP2RegionUpdateLog("INFO", "success", "ip2region 已随备份导入更新")
+			services.WriteIP2RegionUpdateLog("INFO", "success", "ip2region 已随备份导入更新")
 		}
 		if crsChanged {
 			// L6-66-04：仅写「installing」（文件确已落盘）；「reloading/success」
 			// 由调用方在 session.commit 成功后补写——commit 失败（Caddy 拒绝
 			// 回滚）时任务日志不得谎报更新成功。
-			services.AppendCRSUpdateLog("INFO", "installing", "校验并落盘备份内 CRS 规则")
+			services.WriteCRSUpdateLog("INFO", "installing", "校验并落盘备份内 CRS 规则")
 		}
 	}
 	return "", true, crsChanged

@@ -38,7 +38,7 @@ type Descriptor struct {
     CancelHook func() bool; EnabledFn func() bool
     StatusFn func() string
     ManualRun, Cancelable bool
-    RunsOn Role; MasterOnly bool
+    RunsOn Role // 角色门唯一事实源（MasterOnly bool 双机制第 72 轮收敛删除——调度/手动触发守卫统一 roleAllows）
 }
 ```
 

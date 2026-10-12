@@ -369,6 +369,11 @@ func gitHubAPIToken() string {
 	}
 	var token string
 	if err := db.DB.QueryRow(`SELECT COALESCE(github_token,'') FROM global_config WHERE id=1`).Scan(&token); err != nil {
+		// SEC-C-2（第 72 轮审计）：非 ErrNoRows 读库失败记 warn 留痕（对齐
+		// getGitHubProxyURL 口径）——静默降级会让连日 403 限流排障不可见。
+		if !errors.Is(err, sql.ErrNoRows) {
+			Logf("warn", "读取 GitHub API 令牌失败，按无令牌降级（未认证限流 60/h）: %v", err)
+		}
 		return ""
 	}
 	return token

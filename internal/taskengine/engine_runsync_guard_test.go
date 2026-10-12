@@ -31,13 +31,15 @@ func TestRunSync_rejectsDaemonKind(t *testing.T) {
 	}
 }
 
-// Given MasterOnly 描述符 + 引擎为从节点角色。
+// Given RunsOn=RoleMasterOnly 描述符 + 引擎为从节点角色。
 // When RunSync 直调。
 // Then 返回「该操作仅允许在主节点执行」（与 Trigger 同型口径），Run 体未执行。
+// TASK-1（第 72 轮）：角色门双机制收敛——Descriptor.MasterOnly bool 删除，
+// 守卫统一走 roleAllows(RunsOn)（与调度面 tick 同函数）。
 func TestRunSync_masterOnlyRejectedOnSlave(t *testing.T) {
 	e := newTestEngine(t)
 	var runs atomic.Int32
-	e.Register(Descriptor{ID: "t-rsm", Family: "t", Name: "主仅M", Kind: KindScheduled, MasterOnly: true,
+	e.Register(Descriptor{ID: "t-rsm", Family: "t", Name: "主仅M", Kind: KindScheduled, RunsOn: RoleMasterOnly,
 		// TASK-L2（第 69 轮）配套：Scheduled 注册必须带 NextSlotFn（远期槽——
 		// tick 不触发，本测试只验 RunSync 角色门）。
 		NextSlotFn: func() time.Time { return time.Now().Add(time.Hour) },
@@ -50,6 +52,26 @@ func TestRunSync_masterOnlyRejectedOnSlave(t *testing.T) {
 	}
 	if got := runs.Load(); got != 0 {
 		t.Fatalf("从节点上 MasterOnly 任务 Run 体不得执行，执行次数=%d", got)
+	}
+}
+
+// Given RunsOn=RoleMasterOnly 描述符 + 引擎为从节点角色。
+// When Trigger 手动触发。
+// Then 同样被角色门拒绝（Trigger 守卫 :338 与 RunSync 同型——TASK-1 收敛前
+// 该守卫只认 MasterOnly bool，cert 族/auto-backup 仅声明 RunsOn 者可绕过）。
+func TestTrigger_masterOnlyRejectedOnSlave(t *testing.T) {
+	e := newTestEngine(t)
+	var runs atomic.Int32
+	e.Register(Descriptor{ID: "t-trm", Family: "t", Name: "主仅T", Kind: KindOneshot, RunsOn: RoleMasterOnly,
+		Run: func(rc RunContext) error { runs.Add(1); return nil }})
+	e.SetRole(false) // 从节点
+
+	err := e.Trigger("t-trm", "manual", "tester")
+	if err == nil || !strings.Contains(err.Error(), "主节点") {
+		t.Fatalf("从节点 Trigger 应拒绝 RoleMasterOnly 任务，得到 err=%v", err)
+	}
+	if got := runs.Load(); got != 0 {
+		t.Fatalf("从节点上 RoleMasterOnly 任务 Run 体不得执行，执行次数=%d", got)
 	}
 }
 

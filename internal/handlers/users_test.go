@@ -75,6 +75,30 @@ func TestUpdateUser_rejectsDemotingLastEnabledAdministrator(t *testing.T) {
 	}
 }
 
+// SYS-F4（第 72 轮 P5）：UpdateUser 的 UPDATE 命中 0 行此前一律误报
+// 409「不能移除最后一个已启用管理员」——并发删除形态（读旧行后、UPDATE 前
+// 行消失）应镜像 ToggleUserStatus 先例按 COUNT 分判：行已不在 → 404；
+// 行仍在（末管理员 EXISTS 门拦截）→ 409。
+func TestUpdateUser_rowVanishingBeforeUpdateReturns404(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	seedUserAuditTest(t, 1, "admin", "admin", true)
+	seedUserAuditTest(t, 5, "vanish-user", "user", true)
+	// 触发器模拟并发删除：UPDATE 命中前删行 + RAISE(IGNORE) 吞掉本次更新
+	//（等价于 DELETE 抢在 UPDATE 前提交——RowsAffected=0 且行已不存在）。
+	if _, err := db.DB.Exec(`CREATE TRIGGER users_vanish_5 BEFORE UPDATE ON users WHEN OLD.id=5 BEGIN DELETE FROM users WHERE id=5; SELECT RAISE(IGNORE); END`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = db.DB.Exec("DROP TRIGGER IF EXISTS users_vanish_5") })
+
+	response := serveUserMutation(h, http.MethodPut, "/users/5", `{"display_name":"renamed"}`, 1, h.UpdateUser)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status=%d body=%s, want 404（并发删除不得误报管理员锁）", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "用户不存在") {
+		t.Fatalf("body=%s, want 用户不存在", response.Body.String())
+	}
+}
+
 func TestUpdateUser_concurrentDemotionsPreserveEnabledAdministrator(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	seedUserAuditTest(t, 1, "bystander", "user", true) // id=1 占位(非 admin,不参与末管理员计数)

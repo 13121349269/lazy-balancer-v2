@@ -227,7 +227,17 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 			return
 		}
 		if rowsAffected == 0 {
-			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "不能移除最后一个已启用管理员"})
+			// SYS-F4（第 72 轮 P5）：0 行按 COUNT 分判（镜像 ToggleUserStatus
+			// 先例）——行已消失（并发删除）→ 404；行仍在=末管理员 EXISTS 门
+			// 拦截 → 409。此前一律 409 会把并发删除误报成管理员锁。
+			var exists int
+			if err := tx.QueryRowContext(c.Request.Context(), "SELECT COUNT(*) FROM users WHERE id = ?", id).Scan(&exists); err != nil {
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新用户失败"})
+			} else if exists == 0 {
+				c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "用户不存在"})
+			} else {
+				c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "不能移除最后一个已启用管理员"})
+			}
 			return
 		}
 	}

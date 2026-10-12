@@ -56,6 +56,28 @@ func TestCertJobRetryBlocked_rejects_disabled_job_without_timestamp(t *testing.T
 	}
 }
 
+// CERT-N3（第 72 轮）：downloaded 态（证书已签发下载、停在部署退避窗口）
+// 的重试拦截文案不得复用在途签发口径「任务正在执行中」——签发已结束，
+// 用户被误导为签发流程卡住。单列部署窗口口径。
+func TestCertJobRetryBlocked_downloaded_job_uses_deployment_message(t *testing.T) {
+	// Given：downloaded 任务刚进入部署退避窗口（1 分钟前更新）
+	now := time.Now()
+
+	// When
+	blocked, message := certJobRetryBlocked("downloaded", sql.NullTime{Time: now.Add(-time.Minute), Valid: true}, now)
+
+	// Then：仍被拦截（部署窗口守卫不变），但文案单列
+	if !blocked {
+		t.Fatal("fresh downloaded job retry was allowed")
+	}
+	if message == "任务正在执行中，请稍后重试" {
+		t.Fatalf("downloaded message=%q, 复用了在途签发文案", message)
+	}
+	if !strings.Contains(message, "部署") {
+		t.Fatalf("downloaded message=%q, want deployment-window wording", message)
+	}
+}
+
 func TestRetryCertJob_rejects_inactive_rule_atomically(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	services.ResetCAQueueManagerForTest()

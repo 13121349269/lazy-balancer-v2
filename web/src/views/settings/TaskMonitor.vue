@@ -143,7 +143,12 @@
                  常驻=启停自管理循环——绑定 loop_on 走 /toggle（后端按 Kind 路由）。
                  方案 A（2026-10-12）：并判 enabled（业务开关联动，如自动更新关闭/
                  备份未启用）——业务关时开关显示「已暂停」，状态列不再用 disabled 表达 -->
-            <el-switch v-if="row.kind !== 'oneshot'" :model-value="!!row.loop_on && row.enabled !== false" :disabled="!canOperate" @change="(v: string | number | boolean) => onToggle(row, !!v)" />
+            <!-- LN-1（第 72 轮）：cert-waiting-ca 默认调度关闭、续期扫描入队
+                 唤醒——开关上加 tooltip 说明自动唤醒语义（页内既有 tooltip 范式） -->
+            <el-tooltip v-else-if="row.id === 'cert-waiting-ca'" content="有证书任务入队时自动唤醒" placement="top" :offset="8" :show-after="150" :show-arrow="false">
+              <el-switch :model-value="!!row.loop_on && row.enabled !== false" :disabled="!canOperate" @change="(v: string | number | boolean) => onToggle(row, !!v)" />
+            </el-tooltip>
+            <el-switch v-else-if="row.kind !== 'oneshot'" :model-value="!!row.loop_on && row.enabled !== false" :disabled="!canOperate" @change="(v: string | number | boolean) => onToggle(row, !!v)" />
             <!-- 触发类（含 cert-job 动态行）：统一显示禁用开关保持页面一致性——
                  仅手动/代码触发执行（2026-10-01 用户裁定；cert-job 特例已消除） -->
             <el-tooltip v-else content="触发类任务不可调度——仅手动/代码触发执行" placement="top" :offset="8" :show-after="150" :show-arrow="false">

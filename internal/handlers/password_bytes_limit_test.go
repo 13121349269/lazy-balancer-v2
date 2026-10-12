@@ -12,7 +12,7 @@ import (
 )
 
 // 密码策略（2026-09-28 用户裁定）：8-24 个可打印 ASCII 字符。
-// 汉字/非 ASCII 在策略层以 400 拒绝（bcrypt 之前）；超长(>32)同理。
+// 汉字/非 ASCII 在策略层以 400 拒绝（bcrypt 之前）；超长(>24)同理。
 func TestUserPasswordEndpoints_reject_passwords_over_24_chars(t *testing.T) {
 	// 40 个中文 rune = 120 字节——超限且含非 ASCII,策略层双违反
 	multibytePassword := strings.Repeat("密", 40)
@@ -81,7 +81,7 @@ func TestCreateUser_accepts_password_of_exactly_24_chars(t *testing.T) {
 	}
 }
 
-// 33 个字符超出上限应被拒绝(边界外)。
+// 25 个字符超出上限应被拒绝(边界外)。
 func TestCreateUser_rejects_password_of_25_chars(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	router := gin.New()

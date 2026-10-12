@@ -110,6 +110,10 @@ func PolicyHasGeoIP(p *models.SecurityPolicy) bool {
 // directives 里嵌内容指纹（CRS 版本 + overrides mtime+size，每次配置生成仅
 // 2 个 stat + 1 个 db 查询，远低于 tarGzDirSum 的整树遍历成本），指纹变 →
 // 池键变 → 新 WAF 真正编译新规则。Coraza 把 '#' 当注释行，不影响语义。
+// 覆盖边界（SEC-B-2 第 72 轮核实，维持设计）：crs-setup.conf 与 rules/*.conf 的
+// 直接手改不进池指纹（指纹只含版本行+overrides mtime/size）——标准变更链路
+// （CRS 更新器/导入）必改版本行触发指纹翻转；绕过链路的手改需重启进程生效，
+// 属已声明的成本权衡。
 // crsPoolFingerprintForChain 是批量链构建入口的一次性指纹取值点（审计 B5-F2）。
 func crsPoolFingerprintForChain() string {
 	return crsPoolFingerprint()
@@ -368,7 +372,10 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, crs
 	// 仅自定义模式同样需要 body processor 激活:自定义 body 条件规则依赖解析
 	// (SEC-REVIEW-03 随四态化一并解决);id:11 守卫计分在本模式无 949 消费,
 	// 仅留事件——与计分动作的检测计分退化口径一致。
-	if p.Mode == "custom_only" {
+	// SEC-B-1（第 72 轮）：门收紧 hasCustomRules——custom_only+仅 IP 控制
+	// 形状下上方 SecRequestBodyAccess 恒 Off（BodyAccessTruthTable 已钉），
+	// id:9/10/11 无消费者，发射即死指令。
+	if p.Mode == "custom_only" && hasCustomRules {
 		emitBodyProcessorRules(&sb)
 	}
 

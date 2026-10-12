@@ -73,8 +73,9 @@ type Descriptor struct {
 	BootSync   bool
 	StatusFn   func() string // 状态镜像
 	Cancelable bool
-	RunsOn     Role
-	MasterOnly bool
+	// RunsOn 角色门唯一事实源（TASK-1 第 72 轮：MasterOnly bool 双机制已
+	// 收敛删除——调度面 tick 与 Trigger/RunSync 守卫统一走 roleAllows）。
+	RunsOn Role
 	// RestartOnRoleFlip：Run 体按角色分流时置位（2026-10-03 裁定，
 	// cluster-sync 引入）——角色真实翻转即换代重启（旧代 Run 体持旧分支，
 	// 不换代则分支与角色脱钩）。未置位的 RoleAny 常驻（如
@@ -335,7 +336,10 @@ func (e *Engine) Trigger(id, trigger, operator string) error {
 	if r.desc.Kind == KindDaemon {
 		return errors.New("taskengine: 常驻任务不支持手动触发（启停即可）")
 	}
-	if r.desc.MasterOnly && !e.isMaster() {
+	// TASK-1（第 72 轮）：角色门收敛为 roleAllows(RunsOn) 单机制——与调度面
+	// tick 同函数；原 MasterOnly bool 双机制下 cert 族/auto-backup（仅声明
+	// RunsOn）的手动触发门在从节点形同虚设。
+	if !e.roleAllows(r.desc.RunsOn) {
 		return errors.New("taskengine: 该操作仅允许在主节点执行")
 	}
 	_, err := e.runNow(id, trigger, operator)
@@ -356,7 +360,7 @@ func (e *Engine) RunSync(id, trigger, operator string) (int64, error) {
 	if r.desc.Kind == KindDaemon {
 		return 0, errors.New("taskengine: 常驻任务不支持手动触发（启停即可）")
 	}
-	if r.desc.MasterOnly && !e.isMaster() {
+	if !e.roleAllows(r.desc.RunsOn) {
 		return 0, errors.New("taskengine: 该操作仅允许在主节点执行")
 	}
 	return e.runNow(id, trigger, operator)

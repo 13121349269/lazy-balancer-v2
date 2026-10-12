@@ -184,6 +184,41 @@ func TestBuildCorazaDirectives_BodyAccessTruthTable(t *testing.T) {
 	}
 }
 
+// TestBuildCorazaDirectives_customOnlyIPControlSkipsBodyProcessors（SEC-B-1，
+// 第 72 轮）：custom_only+仅 IP 控制（零启用自定义规则）形状下
+// SecRequestBodyAccess 恒 Off（BodyAccessTruthTable 该格已钉），body
+// processor 激活规则 id:9/10/11 无任何消费者——不得发射（死指令）。
+// 对照格：custom_only+启用自定义规则时 id:9/10/11 必须在场（body 条件规则
+// 依赖解析，SEC-REVIEW-03）。
+func TestBuildCorazaDirectives_customOnlyIPControlSkipsBodyProcessors(t *testing.T) {
+	// Given：custom_only + 仅 IP 控制（无自定义规则）
+	ipOnly := &models.SecurityPolicy{Mode: "custom_only", Enabled: true,
+		IPACLEnabled: true, IPACLMode: "deny", IPACLList: `["10.0.0.0/8"]`}
+	// When
+	directives := mustDirectives(BuildCorazaDirectives(ipOnly, nil, "", false, 0))
+	// Then：引擎为 IP 控制开启但 body access Off，id:9/10/11 三条死指令缺席
+	if !strings.Contains(directives, "SecRuleEngine On") {
+		t.Fatalf("IP 控制形状引擎必须 On:\n%s", directives)
+	}
+	if !strings.Contains(directives, "SecRequestBodyAccess Off") {
+		t.Fatalf("零 body 消费者形状 body access 必须 Off:\n%s", directives)
+	}
+	for _, id := range []string{"id:9,", "id:10,", "id:11,"} {
+		if strings.Contains(directives, id) {
+			t.Errorf("custom_only+仅 IP 控制不得发射 body processor 死指令 %s:\n%s", id, directives)
+		}
+	}
+	// 对照格：custom_only+启用自定义规则 → id:9/10/11 在场（body 条件规则依赖）
+	withRules := &models.SecurityPolicy{Mode: "custom_only", Enabled: true,
+		CustomRules: json.RawMessage(`[{"id":1,"name":"r","conditions":[{"target":"uri","operator":"starts_with","pattern":"/a"}],"action":"block","score":5,"enabled":true}]`)}
+	directives2 := mustDirectives(BuildCorazaDirectives(withRules, nil, "", false, 0))
+	for _, id := range []string{"id:9,", "id:10,", "id:11,"} {
+		if !strings.Contains(directives2, id) {
+			t.Errorf("custom_only+启用自定义规则必须发射 body processor 规则 %s:\n%s", id, directives2)
+		}
+	}
+}
+
 func boolStr(b bool) string {
 	if b {
 		return "on"

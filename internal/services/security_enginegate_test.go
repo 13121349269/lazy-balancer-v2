@@ -200,6 +200,20 @@ func TestEngineGate_modeAndControlShapes(t *testing.T) {
 		}
 		compileForEngineGate(t, directives)
 	})
+	// ⑦ SEC-B-1（第 72 轮）GREEN 形状：custom_only+仅 IP 控制（零启用自定义
+	// 规则）——body processor 规则 id:9/10/11 不再发射，渲染产物仍须被
+	// coraza NewWAF 接受（R-10：SecRule 发射面变更的验证终点是引擎编译）。
+	t.Run("custom-only-ip-control-no-body-processors", func(t *testing.T) {
+		p := &models.SecurityPolicy{Mode: "custom_only", Enabled: true,
+			IPACLEnabled: true, IPACLMode: "deny", IPACLList: `["10.0.0.0/8"]`}
+		directives := mustDirectives(BuildCorazaDirectives(p, nil, "", false, 0))
+		for _, id := range []string{"id:9,", "id:10,", "id:11,"} {
+			if strings.Contains(directives, id) {
+				t.Fatalf("custom_only+仅 IP 控制不得发射 body processor 死指令 %s:\n%s", id, directives)
+			}
+		}
+		compileForEngineGate(t, directives)
+	})
 }
 
 // 拦截页按触发策略归因（合成中断码 481+）：blockStatus>0 的新发射形状必须

@@ -342,7 +342,6 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 			}
 			return ""
 		},
-		MasterOnly: true,
 		CancelHook: func() bool { return GetThreatUpdateManager() != nil && GetThreatUpdateManager().CancelRunning() },
 		Run: func(rc taskengine.RunContext) error {
 			m := GetThreatUpdateManager()
@@ -381,8 +380,10 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 		},
 		EnabledFn: func() bool { // 业务开关联动展示（关=已暂停；DB 直读——manager 未初始化窗口也正确）
 			var en int
+			// TASK-2（第 72 轮）：读库失败 fail-closed（显示已暂停）——曾 err→true
+			// 把读错误报为启用（threat 侧 ThreatAutoUpdateEnabled 已是 fail-closed 口径）。
 			if err := db.DB.QueryRow("SELECT COALESCE(auto_update,1) FROM security_crs_version WHERE id=1").Scan(&en); err != nil {
-				return true
+				return false
 			}
 			return en == 1
 		},
@@ -398,7 +399,6 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 			}
 			return ""
 		},
-		MasterOnly: true,
 		CancelHook: func() bool { m := GetCRSUpdateManager(); return m != nil && m.CancelRunning() },
 		Run: func(rc taskengine.RunContext) error {
 			m := GetCRSUpdateManager()
@@ -435,8 +435,9 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 		},
 		EnabledFn: func() bool { // 业务开关联动展示（关=已暂停；DB 直读）
 			var en int
+			// TASK-2（第 72 轮）：读库失败 fail-closed（与 crs 同批收敛）。
 			if err := db.DB.QueryRow("SELECT COALESCE(auto_update,1) FROM security_ip2region_version WHERE id=1").Scan(&en); err != nil {
-				return true
+				return false
 			}
 			return en == 1
 		},
@@ -450,7 +451,6 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 			}
 			return ""
 		},
-		MasterOnly: true,
 		CancelHook: func() bool { return GetIP2RegionUpdateManager() != nil && GetIP2RegionUpdateManager().CancelRunning() },
 		Run: func(rc taskengine.RunContext) error {
 			m := GetIP2RegionUpdateManager()
@@ -484,8 +484,10 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 			return time.Time{}
 		},
 		EnabledFn: func() bool { // 业务开关联动展示（备份未启用=已暂停）
+			// TASK-2（第 72 轮）：读库失败 fail-closed——曾 err!=nil||enabled
+			// 把读错误报为启用。
 			row, err := loadAutoBackupSettings()
-			return err != nil || row.enabled
+			return err == nil && row.enabled
 		},
 		Run: func(rc taskengine.RunContext) error {
 			if rc.Trigger == "manual" {

@@ -428,6 +428,53 @@ func TestAutoBackupSettings_returnsSettingsAndRowsDesc(t *testing.T) {
 	}
 }
 
+// SYS-F1（第 72 轮 P4）：GET /settings/auto-backup 的 last_run 此前恒 null——
+// auto_backup_last_run 扫描进 sql.NullString 后零消费（lastRunValue 零赋值）。
+// 钉：库中有水位线时响应面回传同值；库中 NULL 时保持 null 形态（不写空串）。
+func TestAutoBackupSettings_returnsLastRun(t *testing.T) {
+	// Given: 库中既有水位线（off→on 或调度执行写入，RFC3339 形态）
+	h := newAutoBackupTestHandlers(t)
+	if _, err := db.DB.Exec(`UPDATE global_config SET auto_backup_last_run='2026-10-01T03:00:00Z' WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	response := serveAutoBackupJSON(t, h, http.MethodGet, "/settings/auto-backup", "/settings/auto-backup", "", h.AutoBackupSettings)
+
+	// Then: DB 终态与响应面一致
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var stored *string
+	if err := db.DB.QueryRow(`SELECT auto_backup_last_run FROM global_config WHERE id=1`).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored == nil || *stored != "2026-10-01T03:00:00Z" {
+		t.Fatalf("DB last_run=%v, want 2026-10-01T03:00:00Z", stored)
+	}
+	var payload struct {
+		Data struct {
+			LastRun *string `json:"last_run"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.Data.LastRun == nil || *payload.Data.LastRun != *stored {
+		t.Fatalf("last_run=%v, want 库中水位线值 %q", payload.Data.LastRun, *stored)
+	}
+
+	// And: 库中 NULL 时响应保持 null 形态（不写空串）
+	h2 := newAutoBackupTestHandlers(t)
+	response2 := serveAutoBackupJSON(t, h2, http.MethodGet, "/settings/auto-backup", "/settings/auto-backup", "", h2.AutoBackupSettings)
+	if response2.Code != http.StatusOK {
+		t.Fatalf("null-form status=%d body=%s", response2.Code, response2.Body.String())
+	}
+	if !strings.Contains(response2.Body.String(), `"last_run":null`) {
+		t.Fatalf("body=%s, want last_run null 形态", response2.Body.String())
+	}
+}
+
 func TestRunAutoBackupNow_endpointRunsAndRespondsRow(t *testing.T) {
 	h := newAutoBackupTestHandlers(t)
 	wireAutoBackupEngineForTest(t, h)
