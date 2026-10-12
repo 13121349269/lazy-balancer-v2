@@ -1654,15 +1654,18 @@ const canDeleteRule = (row: Rule) => {
 
 const tlsTagType = (row: Rule) => {
   const cert = certInfoMap.value[row.caddy_id]
+  const jobStatus = certJobMap.value[row.caddy_id]?.status
+  // 重新签发进行中（含切换 CA）优先呈现活动态——在役证书 valid 不再抢先显示
+  //「已签发」（第 73 轮用户报告：签发任务执行中标签无变化）。
+  if (row.tls_source === 'acme_dns' && jobStatus && (isCertJobActive(jobStatus) || jobStatus === 'waiting_ca')) return 'warning'
   if (cert?.status === 'expired') return 'danger'
   if (cert?.status === 'expiring') return 'warning'
   if (cert?.status === 'valid') return 'success'
   if (row.tls_source === 'acme_dns') {
-    const status = certJobMap.value[row.caddy_id]?.status
-    if (status === 'issued') return 'success'
-    if (status === 'failed') return 'danger'
-    if (status === 'disabled') return 'info'
-    if (status) return 'warning'
+    if (jobStatus === 'issued') return 'success'
+    if (jobStatus === 'failed') return 'danger'
+    if (jobStatus === 'disabled') return 'info'
+    if (jobStatus) return 'warning'
     return 'info'
   }
   return 'primary'
@@ -1670,13 +1673,17 @@ const tlsTagType = (row: Rule) => {
 
 const tlsTagLabel = (row: Rule) => {
   const cert = certInfoMap.value[row.caddy_id]
+  const jobStatus = certJobMap.value[row.caddy_id]?.status
+  // 活动签发态（含限流冷却）优先用任务阶段性短标签（certJobStatusLabel 2-4 字，
+  // 适配 106px 列宽）——重新签发/切 CA 期间每个阶段实时可见。
+  if (row.tls_source === 'acme_dns' && jobStatus && (isCertJobActive(jobStatus) || jobStatus === 'waiting_ca')) {
+    return certJobStatusLabel(jobStatus)
+  }
   if (cert?.status === 'expired') return '已过期'
   if (cert?.status === 'expiring') return `临期 ${cert.days_remaining} 天`
   if (cert?.status === 'valid') return row.tls_source === 'acme_dns' ? '已签发' : '手动'
   if (row.tls_source === 'acme_dns') {
-    const status = certJobMap.value[row.caddy_id]?.status
-    const label = status ? certJobStatusLabel(status) : ''
-    return label || '未签发'
+    return (jobStatus ? certJobStatusLabel(jobStatus) : '') || '未签发'
   }
   return '手动'
 }
