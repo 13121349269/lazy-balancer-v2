@@ -1,9 +1,0 @@
-HTTP/2 404 
-access-control-allow-headers: Content-Type, Authorization, X-API-Key, X-Cluster-Token, X-Registration-Secret
-access-control-allow-methods: GET, POST, PUT, PATCH, DELETE, OPTIONS
-content-type: text/plain
-x-content-type-options: nosniff
-x-frame-options: DENY
-content-length: 18
-date: Mon, 12 Oct 2026 17:28:39 GMT
-
