@@ -574,6 +574,27 @@
                 <el-switch v-model="wizardForm.custom_routes_enabled" @change="onCustomRoutesToggle" />
                 <span class="form-tip-inline">开启后在下一步配置按路径转发规则</span>
               </el-form-item>
+              <!-- NTLM 兼容（2026-10-12 用户定稿）：与自定义路由同区（后端兼容域）；
+                   开启后以 NTLM 接管形态锁定 7 字段（清单见 onNtlmToggle 弹框） -->
+              <el-form-item>
+                <template #label><span>NTLM 兼容<FieldHelpIcon popper-class="ntlm-help-popper">
+                    <template #content>
+                      <div class="ntlm-help-line">适用场景：Exchange / AD / 旧版 IIS 等使用 NTLM / 协商认证的后端</div>
+                      <div class="ntlm-help-line">已知限制：</div>
+                      <div class="ntlm-help-line">· 若后端协商到 Kerberos，建议不改写 Host</div>
+                      <div class="ntlm-help-line">· 入口 HTTP/2 由客户端自动降级，不受本开关控制</div>
+                    </template>
+                  </FieldHelpIcon></span>
+                </template>
+                <div class="ntlm-switch-control">
+                  <el-switch :model-value="ntlmOn" @change="onNtlmToggle" />
+                  <span class="form-tip-inline">为 NTLM / 协商认证后端锁定长连接亲和的代理形态</span>
+                </div>
+              </el-form-item>
+
+              <div v-if="ntlmOn" class="info-note-bar">
+                <span class="info-note-desc">NTLM 接管已生效：负载策略锁定 Cookie 会话保持 · 请求重试禁用 · 响应立即透传 · Keepalive 300s + 强制 HTTP/1.1 · 主动健康检查关闭（被动健康检查仍在役）</span>
+              </div>
             </template>
 
             <el-divider content-position="left" class="compact-divider">负载策略</el-divider>
@@ -600,31 +621,6 @@
               </el-tooltip>
             </div>
 
-            <!-- NTLM 兼容（2026-10-12 用户定稿）：仅 HTTP 规则可见；开启后以
-                 NTLM 接管形态锁定 7 字段（清单见 onNtlmToggle 弹框），被接管
-                 控件在各分区呈灰态 + 「NTLM 接管」徽标 -->
-            <template v-if="wizardForm.protocol === 'http'">
-
-              <el-form-item label="NTLM 兼容">
-                <template #label><span>NTLM 兼容<FieldHelpIcon popper-class="ntlm-help-popper">
-                    <template #content>
-                      <div class="ntlm-help-line">适用场景：Exchange / AD / 旧版 IIS 等使用 NTLM / 协商认证的后端</div>
-                      <div class="ntlm-help-line">已知限制：</div>
-                      <div class="ntlm-help-line">· 若后端协商到 Kerberos，建议不改写 Host</div>
-                      <div class="ntlm-help-line">· 入口 HTTP/2 由客户端自动降级，不受本开关控制</div>
-                    </template>
-                  </FieldHelpIcon></span>
-                </template>
-                <div class="ntlm-switch-control">
-                  <el-switch :model-value="ntlmOn" @change="onNtlmToggle" />
-                  <span class="form-tip-inline">为 NTLM / 协商认证后端锁定长连接亲和的代理形态</span>
-                </div>
-              </el-form-item>
-
-              <div v-if="ntlmOn" class="info-note-bar">
-                <span class="info-note-desc">NTLM 接管已生效：负载策略锁定 Cookie 会话保持 · 请求重试禁用 · 响应立即透传 · Keepalive 300s + 强制 HTTP/1.1 · 主动健康检查关闭（被动健康检查仍在役）</span>
-              </div>
-            </template>
 
             <el-divider content-position="left" class="compact-divider">健康检查</el-divider>
 
