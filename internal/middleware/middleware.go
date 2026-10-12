@@ -461,6 +461,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				admin.PUT("/security/policies/:id", h.UpdateSecurityPolicy)
 				admin.DELETE("/security/policies/:id", h.DeleteSecurityPolicy)
 				admin.POST("/security/policies/:id/bind", h.BindRuleToPolicy)
+				admin.POST("/security/policies/:id/bindings/bulk", h.BulkUpdatePolicyBindings)
 				admin.DELETE("/security/policies/:id/bind/:caddy_id", h.UnbindRuleFromPolicy)
 				admin.PUT("/security/rules/:caddy_id/policies", h.SetRuleSecurityPolicies)
 				admin.POST("/security/policies/batch-bind", h.BatchBindSecurityPolicies)

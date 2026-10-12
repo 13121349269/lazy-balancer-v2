@@ -127,6 +127,7 @@ var auditRoutePolicies = map[string]AuditPolicy{
 	"PUT /api/v1/security/policies/:id":                   AuditPolicyExplicit,
 	"DELETE /api/v1/security/policies/:id":                AuditPolicyExplicit,
 	"POST /api/v1/security/policies/:id/bind":             AuditPolicyExplicit,
+	"POST /api/v1/security/policies/:id/bindings/bulk":    AuditPolicyExplicit,
 	"DELETE /api/v1/security/policies/:id/bind/:caddy_id": AuditPolicyExplicit,
 	"PUT /api/v1/security/rules/:caddy_id/policies":       AuditPolicyExplicit,
 	"POST /api/v1/security/policies/batch-bind":           AuditPolicyExplicit,

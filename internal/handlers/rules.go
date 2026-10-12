@@ -1852,23 +1852,19 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		}
 	}()
 
-	// L4-66-01：acme→manual 切换第一步——事务内先把非终态 cert_jobs 翻转为终态
-	// （'disabled'，照 DisableRule 用的终态值），使主 UPDATE 的 NOT EXISTS 守卫
-	// 放行、30s 补扫（requeueStrandedQueuedJobs/requeueWaitingCAJobs）不再复活
-	// 该行。事务回滚（应用失败）时翻转一并撤销，队列仍持有任务，语义一致。
+	// 孤儿自愈（第 72 轮用户裁定，取代 L4-66-01 的转换事件判定）：规则保存后
+	// 终态不使用 ACME 自动签发（证书源手动 / 禁用 TLS）即删除其全部 cert_jobs
+	//（含 failed/issued 历史残留）——v2.3.5 时代 acme→manual 翻转语义遗留的
+	// 失败行，用户重存规则（manual→manual，无转换事件）也一并收敛，幂等。
+	// 30s 补扫不再有非终态行可复活；事务回滚（应用失败）时删除一并撤销。
+	// req.TLSSource/req.EnableTLS 在合并区已按 existingRule 兜底（缺省提交
+	// =维持原状），直接判终态即可。删除在 tx 内（应用失败随事务回滚），提交
+	// 后仍取消队列在途签发（下方 cancelRuleJobs——行已删仍需防 worker 僵尸执行）。
+	orphanACME := !derefBool(req.EnableTLS) || req.TLSSource != "acme_dns"
 	var switchedCertJobs int64
 	delReason := ""
-	// R10（第 72 轮，用户裁定）：规则脱离 ACME（改手动/禁用 TLS）时直接删除
-	// 该规则全部 cert_jobs（含 failed/issued）——取代 L4-66-01 的「非终态翻
-	// disabled、failed 保留」：失败行残留任务列表且重签按钮误导（实际恒 409），
-	// 禁用 TLS 路径此前完全无处理。删除在 tx 内（应用失败随事务回滚），提交
-	// 后仍取消队列在途签发（下方 cancelRuleJobs——行已删仍需防 worker 僵尸执行）。
-	disableTLS := existingRule.EnableTLS && req.EnableTLS != nil && !*req.EnableTLS
-	if switchingFromACME || disableTLS {
-		delReason = "规则证书源已切换为手动，证书任务已删除"
-		if disableTLS && !switchingFromACME {
-			delReason = "规则已禁用 TLS，证书任务已删除"
-		}
+	if orphanACME {
+		delReason = "规则已不使用 ACME 自动签发，证书任务已删除"
 		delResult, delErr := tx.Exec("DELETE FROM cert_jobs WHERE rule_id=?", caddyID)
 		if delErr != nil {
 			services.Logf("error", "UpdateRule cert job delete error for caddy_id=%s: %v", caddyID, delErr)
@@ -1970,7 +1966,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	// 并取消队列在途签发（DisableRule 同序：先收敛任务行后取消）。有界等待；
 	// 失败仅告警继续——规则切换本身已提交，任务行已删除，队列残留由取消的
 	// best-effort 收敛。
-	if switchingFromACME || disableTLS {
+	if orphanACME {
 		if switchedCertJobs > 0 {
 			services.WriteCertJobLogByRule(caddyID, "WARN", "cancelled", delReason)
 			recordAudit(c, "更新", "证书任务", fmt.Sprintf("规则 %s %s（%d 个）", caddyID, delReason, switchedCertJobs))

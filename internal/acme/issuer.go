@@ -449,6 +449,7 @@ func (i *Issuer) waitForDNS(ctx context.Context, fqdn, expected string, timeout 
 			}
 			if hit {
 				recursiveHits = append(recursiveHits, resolver)
+				log("递归 DNS 已命中 %s @ %s, 值: %s", fqdn, resolver, expected)
 				continue
 			}
 			if len(found) > 0 {
@@ -527,9 +528,9 @@ var (
 	// propagationDivergenceDiagAfter 权威/递归分歧诊断日志阈值（生产 30s）。
 	propagationDivergenceDiagAfter = 30 * time.Second
 	// 递归共识放行阈值：≥MinHits 台递归命中当前值 × 连续 MinRounds 轮。
-	// 两者下限=2 由 TestPropagationConsensusDefaults 钉死（M9：单台缓存超前
-	// 不得单轮放行）。
-	propagationConsensusMinHits   = 2
+	// MinHits 下限=3、MinRounds 下限=2 由 TestPropagationConsensusDefaults
+	// 钉死（M9：单台/双台缓存超前不得放行，2026-10-13 用户裁定 2→3）。
+	propagationConsensusMinHits   = 3
 	propagationConsensusMinRounds = 2
 )
 

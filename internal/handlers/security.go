@@ -2186,10 +2186,8 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 }
 
 // SetRuleSecurityPolicies（v2.2.0 T2）：PUT /security/rules/:caddy_id/policies
-// 原子替换一规则的全部策略绑定（单事务 DELETE + 按 policy_ids 顺序 INSERT）。
-// 服务器强制上限 maxBindingsPerRule 条；规则必须存在且为 HTTP；所有 policy_id
-// 必须存在。空数组（或缺省 policy_ids 字段）= 解除该规则全部绑定，与
-// apidocs/MCP 契约一致。
+// 原子替换一规则的全部策略绑定。校验与替换核心在 setRulePoliciesInTx
+// （第 72 轮与批量端点 /security/rules/policies/batch 同源——R-12 单实现）。
 func (h *Handlers) SetRuleSecurityPolicies(c *gin.Context) {
 	h.caddyOpMu.Lock()
 	defer h.caddyOpMu.Unlock()
@@ -2205,105 +2203,18 @@ func (h *Handlers) SetRuleSecurityPolicies(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
 		return
 	}
-	// 上限判定须先去重（B-I2）：[1,1,2,3,4,5] 为 5 条唯一策略，不得因原始数组
-	// 长度 6 误判超限。去重同时避免同一 id 重复计数导致存在性校验误判
-	// （INSERT OR IGNORE 本来就会去重，但 COUNT 必须与去重后的集合对齐）。
-	seen := map[int]struct{}{}
-	uniqueIDs := make([]int, 0, len(req.PolicyIDs))
-	for _, id := range req.PolicyIDs {
-		if _, dup := seen[id]; dup {
-			continue
-		}
-		seen[id] = struct{}{}
-		uniqueIDs = append(uniqueIDs, id)
-	}
-	if len(uniqueIDs) > maxBindingsPerRule {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("最多绑定 %d 条策略", maxBindingsPerRule)})
-		return
-	}
-	// 与 BindRuleToPolicy 同事务口径：存在性校验 + DELETE + 有序 INSERT 同事务，
-	// 写锁由 _txlock=immediate 在 BEGIN 处获取，避免校验与写入之间规则/策略被
-	// 并发删除产生悬挂绑定。
 	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
 	defer tx.Rollback()
-	var ruleExists int
-	var ruleProtocol string
-	if err := tx.QueryRowContext(c.Request.Context(), "SELECT COUNT(*), COALESCE(MAX(protocol),'') FROM lb_rules WHERE caddy_id=?", ruleCaddyID).Scan(&ruleExists, &ruleProtocol); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+	if msg := setRulePoliciesInTx(c.Request.Context(), tx, ruleCaddyID, req.PolicyIDs); msg != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: *msg})
 		return
 	}
-	if ruleExists == 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "规则不存在"})
-		return
-	}
-	if ruleProtocol != "http" {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "安全策略仅支持绑定 HTTP 规则（TCP 规则不经过 WAF/IP 访问控制/限流链）"})
-		return
-	}
-	if len(uniqueIDs) > 0 {
-		placeholders := make([]string, len(uniqueIDs))
-		args := make([]interface{}, len(uniqueIDs))
-		for i, id := range uniqueIDs {
-			placeholders[i] = "?"
-			args[i] = id
-		}
-		var found int
-		if err := tx.QueryRowContext(c.Request.Context(), "SELECT COUNT(*) FROM security_policies WHERE id IN ("+strings.Join(placeholders, ",")+")", args...).Scan(&found); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
-			return
-		}
-		if found != len(uniqueIDs) {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "部分策略不存在"})
-			return
-		}
-	}
-	// 混合策略仅可更新迁移（同上裁定）：绑定集含 mixed 即 400。
-	if len(uniqueIDs) > 0 {
-		placeholders := make([]string, len(uniqueIDs))
-		args := make([]interface{}, len(uniqueIDs))
-		for i, id := range uniqueIDs {
-			placeholders[i] = "?"
-			args[i] = id
-		}
-		var mixedCount int
-		if err := tx.QueryRowContext(c.Request.Context(), "SELECT COUNT(*) FROM security_policies WHERE policy_type='mixed' AND id IN ("+strings.Join(placeholders, ",")+")", args...).Scan(&mixedCount); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
-			return
-		}
-		if mixedCount > 0 {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "混合策略为兼容旧版形态，仅支持「更新迁移」，不允许绑定规则"})
-			return
-		}
-	}
-	// 限流策略唯一绑定：提交集含 ≥2 条 stage2 即 400（存量多限流绑定不受影响，
-	// 收敛后提交即可）。
-	if len(uniqueIDs) > 0 {
-		stage2Count, err := countStage2Policies(tx, c.Request.Context(), uniqueIDs)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
-			return
-		}
-		if stage2Count > 1 {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "每条规则最多绑定一条限流策略，请从提交集中移除多余的限流策略"})
-			return
-		}
-	}
-	if _, err := tx.ExecContext(c.Request.Context(), "DELETE FROM security_policy_bindings WHERE rule_caddy_id=?", ruleCaddyID); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
-		return
-	}
-	for _, id := range uniqueIDs {
-		if _, err := tx.ExecContext(c.Request.Context(), "INSERT OR IGNORE INTO security_policy_bindings (rule_caddy_id, policy_id) VALUES (?, ?)", ruleCaddyID, id); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
-			return
-		}
-	}
-	idStrs := make([]string, len(uniqueIDs))
-	for i, id := range uniqueIDs {
+	idStrs := make([]string, len(req.PolicyIDs))
+	for i, id := range req.PolicyIDs {
 		idStrs[i] = strconv.Itoa(id)
 	}
 	summary := strings.Join(idStrs, ",")
@@ -2314,6 +2225,225 @@ func (h *Handlers) SetRuleSecurityPolicies(c *gin.Context) {
 		Resource: "安全策略", AuditAction: "更新",
 		AuditDetail: fmt.Sprintf("设置规则 %s 的安全策略为 [%s]", ruleCaddyID, summary),
 		SuccessMsg:  "规则安全策略已更新",
+	})
+}
+
+// setRulePoliciesInTx 校验并原子替换单规则的策略绑定集（DELETE+按去重序
+// INSERT OR IGNORE），供单条端点与批量端点共用（第 72 轮 R-12 单实现）。
+// 返回 nil=成功；非 nil=面向用户的 400 消息（调用方负责回滚事务）。
+// 校验族：规则存在且 HTTP、去重后 ≤maxBindingsPerRule、策略全部存在、
+// 不含 mixed、stage2 至多一条。
+func setRulePoliciesInTx(ctx context.Context, tx *sql.Tx, ruleCaddyID string, policyIDs []int) *string {
+	// 上限判定须先去重（B-I2）：[1,1,2,3,4,5] 为 5 条唯一策略，不得因原始数组
+	// 长度 6 误判超限。去重同时避免同一 id 重复计数导致存在性校验误判
+	// （INSERT OR IGNORE 本来就会去重，但 COUNT 必须与去重后的集合对齐）。
+	seen := map[int]struct{}{}
+	uniqueIDs := make([]int, 0, len(policyIDs))
+	for _, id := range policyIDs {
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		uniqueIDs = append(uniqueIDs, id)
+	}
+	if len(uniqueIDs) > maxBindingsPerRule {
+		msg := fmt.Sprintf("最多绑定 %d 条策略", maxBindingsPerRule)
+		return &msg
+	}
+	// 与 BindRuleToPolicy 同事务口径：存在性校验 + DELETE + 有序 INSERT 同事务，
+	// 写锁由 _txlock=immediate 在 BEGIN 处获取，避免校验与写入之间规则/策略被
+	// 并发删除产生悬挂绑定。
+	var ruleExists int
+	var ruleProtocol string
+	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*), COALESCE(MAX(protocol),'') FROM lb_rules WHERE caddy_id=?", ruleCaddyID).Scan(&ruleExists, &ruleProtocol); err != nil {
+		msg := err.Error()
+		return &msg
+	}
+	if ruleExists == 0 {
+		msg := "规则不存在"
+		return &msg
+	}
+	if ruleProtocol != "http" {
+		msg := "安全策略仅支持绑定 HTTP 规则（TCP 规则不经过 WAF/IP 访问控制/限流链）"
+		return &msg
+	}
+	if len(uniqueIDs) > 0 {
+		placeholders := make([]string, len(uniqueIDs))
+		args := make([]interface{}, len(uniqueIDs))
+		for i, id := range uniqueIDs {
+			placeholders[i] = "?"
+			args[i] = id
+		}
+		var found int
+		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM security_policies WHERE id IN ("+strings.Join(placeholders, ",")+")", args...).Scan(&found); err != nil {
+			msg := err.Error()
+			return &msg
+		}
+		if found != len(uniqueIDs) {
+			msg := "部分策略不存在"
+			return &msg
+		}
+	}
+	// 混合策略仅可更新迁移（同上裁定）：绑定集含 mixed 即拒绝。
+	if len(uniqueIDs) > 0 {
+		placeholders := make([]string, len(uniqueIDs))
+		args := make([]interface{}, len(uniqueIDs))
+		for i, id := range uniqueIDs {
+			placeholders[i] = "?"
+			args[i] = id
+		}
+		var mixedCount int
+		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM security_policies WHERE policy_type='mixed' AND id IN ("+strings.Join(placeholders, ",")+")", args...).Scan(&mixedCount); err != nil {
+			msg := err.Error()
+			return &msg
+		}
+		if mixedCount > 0 {
+			msg := "混合策略为兼容旧版形态，仅支持「更新迁移」，不允许绑定规则"
+			return &msg
+		}
+	}
+	// 限流策略唯一绑定：提交集含 ≥2 条 stage2 即拒绝（存量多限流绑定不受影响，
+	// 收敛后提交即可）。
+	if len(uniqueIDs) > 0 {
+		stage2Count, err := countStage2Policies(tx, ctx, uniqueIDs)
+		if err != nil {
+			msg := err.Error()
+			return &msg
+		}
+		if stage2Count > 1 {
+			msg := "每条规则最多绑定一条限流策略，请从提交集中移除多余的限流策略"
+			return &msg
+		}
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM security_policy_bindings WHERE rule_caddy_id=?", ruleCaddyID); err != nil {
+		msg := err.Error()
+		return &msg
+	}
+	for _, id := range uniqueIDs {
+		if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO security_policy_bindings (rule_caddy_id, policy_id) VALUES (?, ?)", ruleCaddyID, id); err != nil {
+			msg := err.Error()
+			return &msg
+		}
+	}
+	return nil
+}
+
+// BulkUpdatePolicyBindings（第 72 轮，用户裁定）：POST /security/policies/:id/bindings/bulk
+// {"bind":["lb_a"],"unbind":["lb_c"]}——「策略保存/绑定规则弹框（策略模式）」
+// 前端此前逐规则调 bind/unbind 单条端点，每条独立全链渲染+validate+/load
+// （N×~500ms，后端配置锁串行化）。单事务批量增删**本策略**的绑定行，不触碰
+// 兄弟绑定（第 48 轮并发安全语义：additive/精确删除），全程恰好一次
+// finishTxApply（单渲染）。任一规则校验失败=400 整体拒绝且事务回滚；
+// bind+unbind 合计上限 100；幂等（重复 bind/未绑定的 unbind 均无害）。
+func (h *Handlers) BulkUpdatePolicyBindings(c *gin.Context) {
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
+
+	policyID, err := strconv.Atoi(c.Param("id"))
+	if err != nil || policyID <= 0 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid policy ID"})
+		return
+	}
+	const maxBulkBindings = 100
+	var req struct {
+		Bind   []string `json:"bind"`
+		Unbind []string `json:"unbind"`
+	}
+	if !guardConfiguredJSONBody(c) {
+		return
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
+		return
+	}
+	if len(req.Bind)+len(req.Unbind) > maxBulkBindings {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("单次最多提交 %d 条规则", maxBulkBindings)})
+		return
+	}
+	// 去重 + 禁止同一规则同时出现在 bind 与 unbind（语义冲突）。
+	seen := map[string]struct{}{}
+	unbindSet := map[string]struct{}{}
+	for _, id := range req.Unbind {
+		seen[id] = struct{}{}
+		unbindSet[id] = struct{}{}
+	}
+	for _, id := range req.Bind {
+		if _, clash := unbindSet[id]; clash {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "同一规则不能同时出现在 bind 与 unbind: " + id})
+			return
+		}
+		seen[id] = struct{}{}
+	}
+	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	defer tx.Rollback()
+	// 策略存在性（含 mixed 拒绝——与单条 bind 端点同口径）。
+	var policyExists, mixed int
+	if err := tx.QueryRowContext(c.Request.Context(), "SELECT COUNT(*), COALESCE(SUM(policy_type='mixed'),0) FROM security_policies WHERE id=?", policyID).Scan(&policyExists, &mixed); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	if policyExists == 0 {
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "策略不存在"})
+		return
+	}
+	if mixed > 0 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "混合策略为兼容旧版形态，仅支持「更新迁移」，不允许绑定规则"})
+		return
+	}
+	// 逐规则校验存在且 HTTP（单条 bind 端点同口径），并即时执行增删。
+	applyOne := func(ruleCaddyID string, bind bool) *string {
+		var ruleExists int
+		var ruleProtocol string
+		if err := tx.QueryRowContext(c.Request.Context(), "SELECT COUNT(*), COALESCE(MAX(protocol),'') FROM lb_rules WHERE caddy_id=?", ruleCaddyID).Scan(&ruleExists, &ruleProtocol); err != nil {
+			msg := err.Error()
+			return &msg
+		}
+		if ruleExists == 0 {
+			if !bind {
+				// unbind 目标规则已不存在=目标态（无该绑定）已达成——幂等放行
+				//（bind 目标不存在仍是错误：无法达成）。
+				return nil
+			}
+			msg := "规则不存在: " + ruleCaddyID
+			return &msg
+		}
+		if ruleProtocol != "http" {
+			msg := ruleCaddyID + ": 安全策略仅支持绑定 HTTP 规则（TCP 规则不经过 WAF/IP 访问控制/限流链）"
+			return &msg
+		}
+		if bind {
+			if _, err := tx.ExecContext(c.Request.Context(), "INSERT OR IGNORE INTO security_policy_bindings (rule_caddy_id, policy_id) VALUES (?, ?)", ruleCaddyID, policyID); err != nil {
+				msg := err.Error()
+				return &msg
+			}
+			return nil
+		}
+		if _, err := tx.ExecContext(c.Request.Context(), "DELETE FROM security_policy_bindings WHERE rule_caddy_id=? AND policy_id=?", ruleCaddyID, policyID); err != nil {
+			msg := err.Error()
+			return &msg
+		}
+		return nil
+	}
+	for _, ruleCaddyID := range req.Bind {
+		if msg := applyOne(ruleCaddyID, true); msg != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: *msg})
+			return
+		}
+	}
+	for _, ruleCaddyID := range req.Unbind {
+		if msg := applyOne(ruleCaddyID, false); msg != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: *msg})
+			return
+		}
+	}
+	h.finishTxApply(c, tx, txApplyFinish{
+		Resource: "安全策略", AuditAction: "更新",
+		AuditDetail: fmt.Sprintf("策略 %d 批量更新绑定：绑定 %d 条、解绑 %d 条", policyID, len(req.Bind), len(req.Unbind)),
+		SuccessMsg:  "策略绑定批量更新完成",
 	})
 }
 

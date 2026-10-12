@@ -183,6 +183,7 @@ func (h *Handlers) applyFromTxNote(c *gin.Context, tx *sql.Tx, reloadDetail stri
 	// 输入即事务视图的最终渲染。校验器不可用时放行（记日志），事务内应用
 	// 仍是最终门控。
 	cliValidated := true
+	cliStart := time.Now()
 	if err := h.caddyService.ValidateTxRenderViaCLI(tx); err != nil {
 		if !errors.Is(err, services.ErrCLIValidatorUnavailable) {
 			return nil, err
@@ -190,6 +191,8 @@ func (h *Handlers) applyFromTxNote(c *gin.Context, tx *sql.Tx, reloadDetail stri
 		cliValidated = false
 		services.Logf("warn", "caddy CLI 校验器不可用，跳过预检（事务内应用仍门控）: %v", err)
 	}
+	services.Logf("info", "保存链计时: cli_validate=%dms", time.Since(cliStart).Milliseconds())
+	applyStart := time.Now()
 	if err := h.caddyService.ApplyConfigFromTx(tx); err != nil {
 		// 审计真实性裁定（2026-09-25 用户裁定）：同字节短路=未发生真实重载——
 		// 按成功收尾但 note 不落「重载」审计（否则出现从未发生的重载记录）。
@@ -210,6 +213,7 @@ func (h *Handlers) applyFromTxNote(c *gin.Context, tx *sql.Tx, reloadDetail stri
 		// 陈旧 caddy_apply_error 会导致横幅长亮）。
 		h.recordCaddyApplyResult(nil)
 		recordAudit(c, "重载", "Caddy服务", reloadDetail)
+		services.Logf("info", "保存链计时: apply_total=%dms（含渲染+CLI 校验+Caddy 重载）", time.Since(applyStart).Milliseconds())
 	}, nil
 }
 

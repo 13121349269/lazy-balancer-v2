@@ -2967,22 +2967,21 @@ const handleSave = async () => {
       // 保持打开重试时用户停留在此错乱视图）。
       editingPolicyType.value = createPolicyType.value
     }
-    // v2.2.0 多策略绑定保存组合（SC-BIND-02）：新增规则走 additive POST bind（仅
-    // INSERT OR IGNORE 本策略一行，绝不动该规则的兄弟绑定）；取消选择的规则只
-    // DELETE 解绑本策略一行。规则的完整绑定列表不经本对话框改写——PUT 全量替换
-    // 需要持有兄弟绑定快照，在本入口属于危险且无必要的写法。
+    // v2.2.0 多策略绑定保存组合（SC-BIND-02）：新增/取消走策略侧批量端点
+    // （第 72 轮：单事务批量增删本策略绑定行，不触碰兄弟绑定——与原逐规则
+    // additive POST/DELETE 语义一致，但从 N 次全链请求收敛为 1 次单渲染请求）。
     let bindLastRes: { message?: string } | undefined
     try {
-      // 2026-09-08 审计 FE1：捕获最后一个响应传 showSaveResult——退化 200+后缀
+      // 2026-09-08 审计 FE1：捕获响应传 showSaveResult——退化 200+后缀
       // （Caddy 应用失败但 DB 已提交）时持续警告可见（有全局横幅兜底但即时
-      // 反馈更佳）。bind/unbind 均经 finishTxApply 可产生后缀。
-      const bindResults = await Promise.all([
-        ...added.map((caddyId) => request.post(`/security/policies/${editingId.value}/bind`, { rule_caddy_id: caddyId })),
-        ...removed.map((caddyId) => request.delete(`/security/policies/${editingId.value}/bind/${caddyId}`)),
-      ])
-      bindLastRes = bindResults[bindResults.length - 1] as { message?: string }
+      // 反馈更佳）。bulk 端点同样经 finishTxApply 可产生后缀。
+      const bindRes = await request.post<{ message?: string }>(`/security/policies/${editingId.value}/bindings/bulk`, {
+        bind: added,
+        unbind: removed,
+      })
+      bindLastRes = bindRes as { message?: string }
     } catch (error: unknown) {
-      // 失败的 bind 请求已由全局拦截器逐个 toast，这里仅记录并中止收尾
+      // 失败的绑定请求已由全局拦截器 toast，这里仅记录并中止收尾
       console.error('Failed to sync policy bindings:', error)
      ElMessage.warning('策略已保存，但部分规则绑定同步失败；对话框保持打开，重新点击保存可重试绑定（幂等）')
       return

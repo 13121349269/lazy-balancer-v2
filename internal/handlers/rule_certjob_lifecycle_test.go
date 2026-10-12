@@ -130,3 +130,35 @@ func TestUpdateRule_tlsUnchanged_keepsCertJobs(t *testing.T) {
 		t.Fatalf("job status=%q err=%v, want queued", status, err)
 	}
 }
+
+// 孤儿自愈（第 72 轮用户裁定）：规则**早已**是手动证书（v2.3.5 时代转换语义
+// 遗留的残留行），重存（manual→manual，无转换事件）同样按终态删除孤儿行。
+// 实现与钉测同批落盘（终态判定超集自然覆盖）——基线钉豁免 RED。
+func TestUpdateRule_manualResave_healsOrphanCertJobs(t *testing.T) {
+	oldCertDir := testServicesCertDir
+	testServicesCertDir = t.TempDir()
+	t.Cleanup(func() { testServicesCertDir = oldCertDir })
+	harness := newUpdateAuditRuleHandlers(t, "lb_r10_heal", 0, false)
+	seedAuditRule(t, "lb_r10_heal", "before", "heal.example.test", 8080, true, "manual", true)
+	seedAuditUpstream(t, "lb_r10_heal")
+	if _, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_provider_id) VALUES ('lb_r10_heal','heal.example.test','failed',1)`); err != nil {
+		t.Fatalf("seed orphan job: %v", err)
+	}
+	services.ResetCAQueueManagerForTest()
+	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
+	t.Cleanup(services.ResetCAQueueManagerForTest)
+	certPEM, keyPEM, err := generateTestCert("heal.example.test", time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("generate test cert: %v", err)
+	}
+
+	response := putUpdateRule(t, harness, "lb_r10_heal", fmt.Sprintf(
+		`{"name":"after","enable_tls":true,"tls_source":"manual","tls_cert":%q,"tls_key":%q}`, certPEM, keyPEM))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("resave status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	if n := countRuleCertJobs(t, "lb_r10_heal"); n != 0 {
+		t.Fatalf("orphan cert jobs=%d, want 0（manual→manual 重存必须收敛历史残留）", n)
+	}
+}

@@ -64,12 +64,12 @@ func setupPropagationSeams(t *testing.T, authServers []string) *captureLogger {
 	propagationPollInterval = 20 * time.Millisecond
 	propagationDivergenceDiagAfter = 100 * time.Millisecond
 	propagationRecursiveResolvers = []string{"223.5.5.5:53", "119.29.29.29:53", "8.8.8.8:53", "1.1.1.1:53"} // 按测试覆盖
-	propagationConsensusMinHits = 2
+	propagationConsensusMinHits = 3
 	propagationConsensusMinRounds = 2
 	return logger
 }
 
-// W1 主形态：权威全部 NODATA（生产「全 miss」实证形态）+ 2 台递归恒命中 →
+// W1 主形态：权威全部 NODATA（生产「全 miss」实证形态）+ 3 台递归恒命中 →
 // 连续 2 轮共识即放行。未实现共识放行时 waitForDNS 烧满预算超时（RED）。
 func TestIssuer_waitForDNS_recursiveConsensusReleasesWhenAuthoritativeBlind(t *testing.T) {
 	const expected = "consensus-value"
@@ -78,13 +78,14 @@ func TestIssuer_waitForDNS_recursiveConsensusReleasesWhenAuthoritativeBlind(t *t
 	auth2 := startFakeDNSServer(t, txtResponder(false, expected))
 	rec1 := startFakeDNSServer(t, txtResponder(true, expected))
 	rec2 := startFakeDNSServer(t, txtResponder(true, expected))
+	rec3 := startFakeDNSServer(t, txtResponder(true, expected))
 	logger := setupPropagationSeams(t, []string{auth1, auth2})
-	propagationRecursiveResolvers = []string{rec1, rec2, "127.0.0.1:1"} // 第三台不可达，共识仍需 ≥2 台
+	propagationRecursiveResolvers = []string{rec1, rec2, rec3}
 
 	issuer := &Issuer{Logger: logger}
 	start := time.Now()
 	if err := issuer.waitForDNS(context.Background(), fqdn, expected, 3*time.Second); err != nil {
-		t.Fatalf("recursive consensus (2 resolvers x 2 rounds) must release when authoritative is blind: %v", err)
+		t.Fatalf("recursive consensus (3 resolvers x 2 rounds) must release when authoritative is blind: %v", err)
 	}
 	if elapsed := time.Since(start); elapsed > 2*time.Second {
 		t.Fatalf("consensus release took %v; expected sub-second after two 20ms rounds", elapsed)
@@ -109,8 +110,9 @@ func TestIssuer_waitForDNS_partialAuthoritativeHits_stillReleaseOnConsensus(t *t
 	authMiss := startFakeDNSServer(t, txtResponder(false, expected))
 	rec1 := startFakeDNSServer(t, txtResponder(true, expected))
 	rec2 := startFakeDNSServer(t, txtResponder(true, expected))
+	rec3 := startFakeDNSServer(t, txtResponder(true, expected))
 	logger := setupPropagationSeams(t, []string{authHit, authMiss})
-	propagationRecursiveResolvers = []string{rec1, rec2}
+	propagationRecursiveResolvers = []string{rec1, rec2, rec3}
 
 	issuer := &Issuer{Logger: logger}
 	if err := issuer.waitForDNS(context.Background(), fqdn, expected, 3*time.Second); err != nil {
@@ -196,8 +198,8 @@ func TestIssuer_waitForDNS_divergenceDiagnosedAndTimeoutListsBothSides(t *testin
 
 // 防御：共识阈值接缝不得被生产代码改写为 1（M9 底线的机器可验证形态）。
 func TestPropagationConsensusDefaults(t *testing.T) {
-	if propagationConsensusMinHits < 2 {
-		t.Fatalf("propagationConsensusMinHits=%d < 2 would reintroduce the M9 single-cache premature release", propagationConsensusMinHits)
+	if propagationConsensusMinHits < 3 {
+		t.Fatalf("propagationConsensusMinHits=%d < 3 would weaken the anti-cache-premature-release guard (2026-10-13 user ruling: 2→3)", propagationConsensusMinHits)
 	}
 	if propagationConsensusMinRounds < 2 {
 		t.Fatalf("propagationConsensusMinRounds=%d < 2 would release on a single poll round", propagationConsensusMinRounds)

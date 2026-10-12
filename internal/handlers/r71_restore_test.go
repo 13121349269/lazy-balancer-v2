@@ -40,10 +40,11 @@ func newFakeCaddyServer(t *testing.T, rec *fakeCaddyRecorder) *httptest.Server {
 	return srv
 }
 
-// R71 N-4/N-1（2026-09-06 裁定 ④' 后重述）：UpdateRule 409（证书在途）早退
-// 时运行配置必须零扰动——保存路径已无预校验探针（merged /load 副作用与
-// R70-C-1 恢复机器一并撤除），409 守卫先于任何 Caddy 交互触发，候选上游
-// 不得出现在任何 /load 载荷中。
+// R71 N-4/N-1（2026-09-06 裁定 ④' 后重述；第 72 轮孤儿自愈迁移）：UpdateRule
+// 对 **ACME 规则** 的 409（证书在途）早退仍零扰动（acmeToAcme 守卫测试覆盖）。
+// 本场景（TCP 规则+遗留 queued 死形态任务）在第 72 轮孤儿自愈语义下改为：
+// 保存 200 且遗留任务行被删除——孤儿自愈优先于 409 守卫（用户裁定：脱离
+// ACME 的规则不得被遗留任务挡住，残留行直接清理）。
 func TestUpdateRule_409_restoresRuntimeForTCP(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	gin.SetMode(gin.TestMode)
@@ -51,7 +52,7 @@ func TestUpdateRule_409_restoresRuntimeForTCP(t *testing.T) {
 	fake := newFakeCaddyServer(t, rec)
 	h.caddyService = services.NewCaddyService(fake.URL)
 
-	// Given：一条启用中的 TCP 规则 + 一个非终态证书任务（触发 409 守卫）
+	// Given：一条启用中的 TCP 规则 + 一个非终态证书任务（遗留死形态）
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
 		VALUES ('lb_409tcp','orig','tcp','',9471,1,0,'manual');
 		UPDATE lb_rules SET description='' WHERE caddy_id='lb_409tcp';
@@ -68,11 +69,11 @@ func TestUpdateRule_409_restoresRuntimeForTCP(t *testing.T) {
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
 
-	if response.Code != http.StatusConflict {
-		t.Fatalf("status=%d body=%s, want 409", response.Code, response.Body.String())
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200（孤儿自愈：TCP 规则不被遗留任务挡住）", response.Code, response.Body.String())
 	}
-	// Then：409 早退发生在任何 Caddy 交互之前——零 /load、零候选泄漏。
-	if len(rec.loads) != 0 {
-		t.Fatalf("/load calls=%d, want 0（无探针后 409 早退零运行时扰动）", len(rec.loads))
+	var remaining int
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM cert_jobs WHERE rule_id='lb_409tcp'").Scan(&remaining); err != nil || remaining != 0 {
+		t.Fatalf("cert jobs=%d err=%v, want 0（遗留任务随保存清理）", remaining, err)
 	}
 }
