@@ -615,9 +615,8 @@
             <template v-if="wizardForm.protocol === 'http'">
               <el-divider content-position="left" class="compact-divider">NTLM 兼容</el-divider>
 
-              <el-form-item>
-                <template #label>
-                  <span>NTLM 兼容</span>
+              <el-form-item label="NTLM 兼容">
+                <template #label>NTLM 兼容
                   <el-tooltip placement="top" popper-class="ntlm-help-popper">
                     <template #content>
                       <div class="ntlm-help-line">适用场景：Exchange / AD / 旧版 IIS 等使用 NTLM / 协商认证的后端</div>
@@ -783,7 +782,7 @@
                    NTLM 接管时由开关锁定为开，呈灰态 -->
               <el-divider content-position="left" class="compact-divider">上游兼容</el-divider>
 
-              <el-form-item label="上游强制 HTTP/1.1">
+              <el-form-item label="强制 HTTP/1.1">
                 <div class="active-check-control">
                   <el-switch v-model="wizardForm.upstream_force_http1" :active-value="1" :inactive-value="0" :disabled="ntlmOn" />
                   <span v-if="ntlmOn" class="ntlm-takeover-badge">NTLM 接管</span>
@@ -1118,6 +1117,39 @@
           <LogStorageBar log-key="rule_access" :caddy-id="ruleLogCaddyId" style="margin-right: auto" />
           <el-button @click="ruleLogDialogVisible = false">关闭</el-button>
         </div>
+      </template>
+    </el-dialog>
+
+    <!-- NTLM 开关确认（参照更新迁移预演范式）：开启=接管清单确认；关闭=恢复默认告知 -->
+    <el-dialog v-model="ntlmConfirmVisible" class="dialog-body-inset" width="min(560px, 94vw)" top="10vh" :close-on-click-modal="false">
+      <template #header>
+        <DialogHeader :icon="ntlmConfirmMode === 'on' ? WarningFilled : CircleCheckFilled"
+          :title="ntlmConfirmMode === 'on' ? '开启 NTLM 兼容' : 'NTLM 兼容已关闭'"
+          :subtitle="ntlmConfirmMode === 'on' ? '为 NTLM / 协商认证后端锁定长连接亲和的代理形态' : '已恢复默认配置'" />
+      </template>
+      <div v-if="ntlmConfirmMode === 'on'" class="ntlm-confirm-body">
+        <div class="ntlm-confirm-title">开启后将接管以下配置：</div>
+        <ul class="ntlm-confirm-list">
+          <li>负载策略锁定为 <b>Cookie 会话保持</b></li>
+          <li>禁用请求重试</li>
+          <li>响应立即透传</li>
+          <li>上游连接保持 300s + 强制 HTTP/1.1</li>
+          <li>主动健康检查关闭（探测返回 401 会被误判摘除；被动健康检查仍在役）</li>
+        </ul>
+        <div class="info-note-bar"><span class="info-note-desc">原配置不保留记忆，关闭时恢复默认</span></div>
+      </div>
+      <div v-else class="ntlm-confirm-body">
+        <ul class="ntlm-confirm-list">
+          <li>负载策略解锁为轮询</li>
+          <li>重试窗口恢复 5s 默认</li>
+          <li>透传 / Keepalive / HTTP 版本恢复全局继承</li>
+          <li>主动健康检查保持关闭，可按需重新开启</li>
+        </ul>
+      </div>
+      <template #footer>
+        <el-button @click="ntlmConfirmVisible = false">取消</el-button>
+        <el-button v-if="ntlmConfirmMode === 'on'" type="warning" @click="confirmNtlmToggle">开启</el-button>
+        <el-button v-else type="primary" @click="confirmNtlmToggle">知道了</el-button>
       </template>
     </el-dialog>
     <SecurityBindingEditor
@@ -2587,59 +2619,24 @@ const restoreNtlmDefaults = (): void => {
   wizardForm.enable_active_health_check = false
 }
 
-const onNtlmToggle = async (enabled: string | number | boolean): Promise<void> => {
-  if (Boolean(enabled)) {
-    try {
-      await ElMessageBox.confirm(
-        `<div class="ntlm-msg">
-          <div class="ntlm-msg-head">
-            <svg class="ntlm-msg-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 8v5m0 3v.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/></svg>
-            <div>
-              <div class="ntlm-msg-title">开启 NTLM 兼容</div>
-              <div class="ntlm-msg-sub">为 NTLM / 协商认证后端锁定长连接亲和的代理形态</div>
-            </div>
-          </div>
-          <div class="ntlm-msg-caption">开启后将接管以下配置：</div>
-          <ul class="ntlm-msg-list">
-            <li>负载策略锁定为 <b>Cookie 会话保持</b></li>
-            <li>禁用请求重试</li>
-            <li>响应立即透传</li>
-            <li>上游连接保持 300s + 强制 HTTP/1.1</li>
-            <li>主动健康检查关闭<span class="ntlm-msg-note">（探测返回 401 会被误判摘除；被动健康检查仍在役）</span></li>
-          </ul>
-          <div class="ntlm-msg-foot">原配置不保留记忆，关闭时恢复默认</div>
-        </div>`,
-        '',
-        { dangerouslyUseHTMLString: true, confirmButtonText: '开启', cancelButtonText: '取消', customClass: 'ntlm-msg-box', type: null as unknown as undefined }
-      )
-    } catch {
-      return // 取消：开关由 model-value 驱动自动回弹，不改动任何字段
-    }
+// NTLM 开关确认弹框（参照安全策略「更新迁移预演」范式：DialogHeader+分区清单+footer）
+const ntlmConfirmVisible = ref(false)
+const ntlmConfirmMode = ref<'on' | 'off'>('on')
+
+const onNtlmToggle = (enabled: string | number | boolean): void => {
+  ntlmConfirmMode.value = Boolean(enabled) ? 'on' : 'off'
+  ntlmConfirmVisible.value = true // 开关由 model-value 驱动：取消则自动回弹零改动
+}
+
+const confirmNtlmToggle = (): void => {
+  if (ntlmConfirmMode.value === 'on') {
     wizardForm.ntlm_compatible = 1
     applyNtlmTakeover()
   } else {
     wizardForm.ntlm_compatible = 0
     restoreNtlmDefaults()
-    await ElMessageBox.alert(
-      `<div class="ntlm-msg">
-        <div class="ntlm-msg-head">
-          <svg class="ntlm-msg-icon ntlm-msg-icon-ok" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m5 13 4 4L19 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          <div>
-            <div class="ntlm-msg-title">NTLM 兼容已关闭</div>
-            <div class="ntlm-msg-sub">已恢复默认配置</div>
-          </div>
-        </div>
-        <ul class="ntlm-msg-list">
-          <li>负载策略解锁为轮询</li>
-          <li>重试窗口恢复 5s 默认</li>
-          <li>透传 / Keepalive / HTTP 版本恢复全局继承</li>
-          <li>主动健康检查保持关闭，可按需重新开启</li>
-        </ul>
-      </div>`,
-      '',
-      { dangerouslyUseHTMLString: true, confirmButtonText: '知道了', customClass: 'ntlm-msg-box' }
-    )
   }
+  ntlmConfirmVisible.value = false
 }
 
 // 代理超时区被接管字段（仅刷新间隔）：灰态 + 徽标 + 「立即透传」显示值
@@ -4262,19 +4259,8 @@ onUnmounted(() => {
 /* NTLM 帮助 tooltip：popper 挂 body，须非 scoped */
 .ntlm-help-popper { max-width: 360px; }
 .ntlm-help-popper .ntlm-help-line { font-size: 12px; line-height: 1.7; }
-.ntlm-msg-box { max-width: 480px; }
-.ntlm-msg-box .el-message-box__header { display: none; }
-.ntlm-msg-box .el-message-box__container { align-items: flex-start; }
-.ntlm-msg-box .el-message-box__status { display: none; }
-.ntlm-msg-box .el-message-box__message { padding: 4px 6px 0 2px; }
-.ntlm-msg .ntlm-msg-head { display: flex; align-items: flex-start; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--el-border-color-lighter); }
-.ntlm-msg .ntlm-msg-icon { width: 34px; height: 34px; flex: 0 0 auto; padding: 7px; border-radius: 8px; background: var(--el-color-warning-light-9); color: var(--el-color-warning); }
-.ntlm-msg .ntlm-msg-icon-ok { background: var(--el-color-success-light-9); color: var(--el-color-success); }
-.ntlm-msg .ntlm-msg-title { font-size: 15px; font-weight: 600; color: var(--el-text-color-primary); line-height: 22px; }
-.ntlm-msg .ntlm-msg-sub { font-size: 12px; color: var(--el-text-color-secondary); margin-top: 2px; }
-.ntlm-msg .ntlm-msg-caption { font-size: 13px; color: var(--el-text-color-regular); margin: 12px 0 6px; }
-.ntlm-msg .ntlm-msg-list { margin: 0; padding-left: 18px; font-size: 13px; line-height: 2; color: var(--el-text-color-regular); }
-.ntlm-msg .ntlm-msg-list b { color: var(--el-text-color-primary); }
-.ntlm-msg .ntlm-msg-note { color: var(--el-text-color-secondary); font-size: 12px; }
-.ntlm-msg .ntlm-msg-foot { margin-top: 10px; padding: 8px 10px; border-radius: 6px; background: var(--el-fill-color-light); font-size: 12px; color: var(--el-text-color-secondary); }
+.ntlm-confirm-body { padding: 2px 4px; }
+.ntlm-confirm-title { font-size: 13px; color: var(--el-text-color-regular); margin-bottom: 6px; }
+.ntlm-confirm-list { margin: 0 0 4px; padding-left: 18px; font-size: 13px; line-height: 2; color: var(--el-text-color-regular); }
+.ntlm-confirm-list b { color: var(--el-text-color-primary); }
 </style>
