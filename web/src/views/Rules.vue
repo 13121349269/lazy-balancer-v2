@@ -1134,9 +1134,9 @@
         </ul>
       </div>
       <template #footer>
-        <el-button @click="ntlmConfirmVisible = false">取消</el-button>
+        <el-button v-if="ntlmConfirmMode === 'on'" @click="ntlmConfirmVisible = false">取消</el-button>
         <el-button v-if="ntlmConfirmMode === 'on'" type="warning" @click="confirmNtlmToggle">开启</el-button>
-        <el-button v-else type="primary" @click="confirmNtlmToggle">知道了</el-button>
+        <el-button v-else type="primary" @click="confirmNtlmToggle">确认关闭</el-button>
       </template>
     </el-dialog>
     <SecurityBindingEditor
