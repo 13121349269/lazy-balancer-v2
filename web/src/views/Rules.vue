@@ -517,8 +517,7 @@
               </el-table-column>
               <el-table-column min-width="180" v-if="wizardForm.protocol === 'http'">
                 <template #header>
-                  回源域名
-                  <FieldHelpIcon content="该上游独立的回源 Host 头与 HTTPS SNI（主机名，不带端口；端口沿用左侧端口列配置）。留空=不覆盖（Host 跟随客户端请求或上游地址）" />
+                  回源域名<FieldHelpIcon content="该上游独立的回源 Host 头与 HTTPS SNI（主机名，不带端口；端口沿用左侧端口列配置）。留空=不覆盖（Host 跟随客户端请求或上游地址）" />
                 </template>
                 <template #default="{ row }">
                   <el-tooltip placement="top" :disabled="!wizardForm.dynamic_dns" content="动态上游模式不支持回源域名（改写 Host 请经 API/MCP 设置规则级 host_header）">
@@ -534,8 +533,7 @@
               </el-table-column>
               <el-table-column width="84">
                 <template #header>
-                  权重 %
-                  <FieldHelpIcon content="数字越大，分配到的请求越多；权重相同时即为普通轮询。至少需要添加一个上游服务器。" />
+                  权重 %<FieldHelpIcon content="数字越大，分配到的请求越多；权重相同时即为普通轮询。至少需要添加一个上游服务器。" />
                 </template>
                 <template #default="{ row, $index }">
                   <el-input-number v-model="row.weight" :min="1" :max="100" size="small" controls-position="right" class="upstream-input-small" :disabled="!row.enabled" @change="onWeightChange($index)" />
@@ -543,8 +541,7 @@
               </el-table-column>
               <el-table-column width="118">
                 <template #header>
-                  {{ wizardForm.protocol === 'tcp' ? '最大连接' : '最大请求数' }}
-                  <FieldHelpIcon :content="wizardForm.protocol === 'tcp'
+                  {{ wizardForm.protocol === 'tcp' ? '最大连接' : '最大请求数' }}<FieldHelpIcon :content="wizardForm.protocol === 'tcp'
                     ? '该上游并发连接数上限（HTTP 规则映射为 reverse_proxy 每上游并发请求数 max_requests；TCP 规则映射为 caddy-l4 max_connections），0 为不限制'
                     : '该上游同时处理的请求数达到上限后判定不可用并移出负载，0 为不限制——HTTP 反代无逐上游并发连接限制'" />
                 </template>
@@ -572,7 +569,7 @@
             </div>
 
             <template v-if="wizardForm.protocol === 'http'">
-              <el-divider content-position="left" class="compact-divider">自定义路由</el-divider>
+              <el-divider content-position="left" class="compact-divider">路由与后端兼容</el-divider>
               <el-form-item label="自定义路由">
                 <el-switch v-model="wizardForm.custom_routes_enabled" @change="onCustomRoutesToggle" />
                 <span class="form-tip-inline">开启后在下一步配置按路径转发规则</span>
@@ -607,7 +604,6 @@
                  NTLM 接管形态锁定 7 字段（清单见 onNtlmToggle 弹框），被接管
                  控件在各分区呈灰态 + 「NTLM 接管」徽标 -->
             <template v-if="wizardForm.protocol === 'http'">
-              <el-divider content-position="left" class="compact-divider">NTLM 兼容</el-divider>
 
               <el-form-item label="NTLM 兼容">
                 <template #label><span>NTLM 兼容<FieldHelpIcon popper-class="ntlm-help-popper">
@@ -3967,7 +3963,7 @@ onUnmounted(() => {
   display: flex;
   gap: 8px;
   width: 100%;
-  padding: 0 20px;
+  padding: 10px 20px 14px;
   box-sizing: border-box;
 }
 
