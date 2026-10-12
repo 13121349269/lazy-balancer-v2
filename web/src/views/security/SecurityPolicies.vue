@@ -2961,6 +2961,11 @@ const handleSave = async () => {
       const createdId = saveRes.data?.id
       if (!createdId) throw new Error('创建策略响应缺少 id')
       editingId.value = createdId
+      // 新建落库即转入已保存实体（后续 bind/阶段页覆盖用新 id）——同步锁定
+      // 编辑器类型为用户所选类型：否则 editingPolicyType 仍为 null，editorPolicyType
+      // fallback 'mixed' → 步骤瞬间跳全阶段、标题/标签错变「混合策略」（bind 失败
+      // 保持打开重试时用户停留在此错乱视图）。
+      editingPolicyType.value = createPolicyType.value
     }
     // v2.2.0 多策略绑定保存组合（SC-BIND-02）：新增规则走 additive POST bind（仅
     // INSERT OR IGNORE 本策略一行，绝不动该规则的兄弟绑定）；取消选择的规则只
