@@ -6,12 +6,16 @@
         :min="field.min"
         :max="86400"
         :placeholder="inheritLabel"
-        :disabled="disabled"
+        :disabled="disabled || fieldOverrides?.[field.key]?.disabled === true"
         controls-position="right"
         class="number-input"
         @update:model-value="update(field.key, $event)"
       />
-      <span class="form-tip-inline">
+      <span v-if="fieldOverrides?.[field.key]" class="form-tip-inline">
+        <span v-if="fieldOverrides[field.key]!.badge" class="field-override-badge">{{ fieldOverrides[field.key]!.badge }}</span>
+        {{ fieldOverrides[field.key]!.note }}
+      </span>
+      <span v-else class="form-tip-inline">
         秒，0 = {{ inheritLabel }}<template v-if="showSuggested && field.suggest">；非流式建议 {{ field.suggest }}</template><template v-if="field.desc">；{{ field.desc }}</template>
       </span>
     </el-form-item>
@@ -26,6 +30,13 @@ withDefaults(defineProps<{
   readonly inheritLabel: string
   readonly disabled?: boolean
   readonly showSuggested?: boolean
+  // 逐字段接管态（如 NTLM 兼容）：disabled=禁用输入；note 存在时以接管说明
+  // 替换默认 tip；badge 为前置徽标文案
+  readonly fieldOverrides?: Partial<Record<keyof ProxyTimeoutConfig, {
+    readonly disabled?: boolean
+    readonly badge?: string
+    readonly note?: string
+  }>>
 }>(), { showSuggested: false })
 
 const emit = defineEmits<{
@@ -57,4 +68,16 @@ const update = (field: keyof ProxyTimeoutConfig, value: number | undefined): voi
 
 <style scoped>
 .number-input { width: 120px; }
+.field-override-badge {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 6px;
+  border: 1px solid var(--el-border-color);
+  border-radius: 4px;
+  background: var(--el-fill-color-light);
+  color: var(--el-text-color-secondary);
+  font-size: 11px;
+  line-height: 18px;
+  vertical-align: middle;
+}
 </style>

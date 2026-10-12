@@ -88,6 +88,10 @@ export interface Rule extends ProxyTimeoutConfig {
   request_body_max_size_mb: number
   upstream_keepalive_timeout: number
   server_tokens_hidden: number
+  // NTLM 兼容开关：1=开启（要求 strategy=cookie；仅 HTTP 规则）
+  ntlm_compatible: number
+  // 通用列：1=上游强制 HTTP/1.1（https 上游禁 ALPN h2）；NTLM 接管时恒 1
+  upstream_force_http1: number
   host_header: string
   // 健康检查域名：主动健康检查 probe 的 Host 头；空=跟随 host_header
   health_check_host?: string
@@ -141,6 +145,8 @@ export interface CreateRuleRequest extends ProxyTimeoutConfig {
   request_body_max_size_mb: number
   upstream_keepalive_timeout: number
   server_tokens_hidden: number
+  ntlm_compatible: number
+  upstream_force_http1: number
   custom_routes_enabled: boolean
   path_rules: PathRule[]
   host_header: string
@@ -162,6 +168,8 @@ export interface UpdateRuleRequest extends Omit<CreateRuleRequest,
   | 'request_body_max_size_mb'
   | 'upstream_keepalive_timeout'
   | 'server_tokens_hidden'
+  | 'ntlm_compatible'
+  | 'upstream_force_http1'
   | 'custom_routes_enabled'
   | 'tcp_proxy_protocol'
   | keyof ProxyTimeoutConfig
@@ -173,6 +181,8 @@ export interface UpdateRuleRequest extends Omit<CreateRuleRequest,
   request_body_max_size_mb?: number
   upstream_keepalive_timeout?: number
   server_tokens_hidden?: number
+  ntlm_compatible?: number
+  upstream_force_http1?: number
   custom_routes_enabled?: boolean
   tcp_proxy_protocol: boolean
   proxy_dial_timeout?: number

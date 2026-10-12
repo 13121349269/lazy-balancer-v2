@@ -257,6 +257,11 @@ func createTables() error {
 		request_body_max_size_mb INTEGER DEFAULT 0,
 		upstream_keepalive_timeout INTEGER DEFAULT 0,
 		server_tokens_hidden INTEGER DEFAULT 0,
+		-- 规则级 NTLM 兼容开关（2026-10-12）：仅 HTTP 语义，1=按 NTLM 兼容形态
+		-- 渲染（保存门强制 strategy=cookie）；TCP 规则携带即 400。
+		ntlm_compatible INTEGER NOT NULL DEFAULT 0,
+		-- 上游强制 HTTP/1.1（通用列）：1=对 https 上游禁 ALPN h2（transport.versions）。
+		upstream_force_http1 INTEGER NOT NULL DEFAULT 0,
 		custom_routes_enabled BOOLEAN NOT NULL DEFAULT 0,
 		proxy_dial_timeout INTEGER NOT NULL DEFAULT 0,
 		proxy_response_header_timeout INTEGER NOT NULL DEFAULT 0,
@@ -779,6 +784,8 @@ func runMigrations() error {
 		"lb_rules.request_body_max_size_mb":   "INTEGER DEFAULT 0",
 		"lb_rules.upstream_keepalive_timeout": "INTEGER DEFAULT 0",
 		"lb_rules.server_tokens_hidden":       "INTEGER DEFAULT 0",
+		"lb_rules.ntlm_compatible":            "INTEGER NOT NULL DEFAULT 0",
+		"lb_rules.upstream_force_http1":       "INTEGER NOT NULL DEFAULT 0",
 		"lb_rules.block_page_stage1_id":       "INTEGER NOT NULL DEFAULT 0",
 		"lb_rules.block_page_stage1_status":   "INTEGER NOT NULL DEFAULT 0",
 		"lb_rules.block_page_stage3_id":       "INTEGER NOT NULL DEFAULT 0",
@@ -2517,6 +2524,10 @@ func migrateLbRulesPrimaryKey() error {
 			request_body_max_size_mb INTEGER DEFAULT 0,
 			upstream_keepalive_timeout INTEGER DEFAULT 0,
 			server_tokens_hidden INTEGER DEFAULT 0,
+			-- 与 fresh CREATE 同步携带（ensureNewColumns 已加列，陈旧 DDL 会把列
+			-- 连同值一并丢弃——U6B-3 先例）。
+			ntlm_compatible INTEGER NOT NULL DEFAULT 0,
+			upstream_force_http1 INTEGER NOT NULL DEFAULT 0,
 			custom_routes_enabled BOOLEAN NOT NULL DEFAULT 0,
 			proxy_dial_timeout INTEGER NOT NULL DEFAULT 0,
 			proxy_response_header_timeout INTEGER NOT NULL DEFAULT 0,
@@ -2568,7 +2579,7 @@ func migrateLbRulesPrimaryKey() error {
 			health_check_path, health_check_interval, health_check_timeout,
 			health_check_unhealthy_threshold, health_check_healthy_threshold,
 			enable_active_health_check, tcp_health_check_port, tcp_proxy_protocol, tcp_try_duration, tcp_try_interval,
-			request_body_max_size_mb, upstream_keepalive_timeout, server_tokens_hidden,
+			request_body_max_size_mb, upstream_keepalive_timeout, server_tokens_hidden, ntlm_compatible, upstream_force_http1,
 			custom_routes_enabled,
 			proxy_dial_timeout, proxy_response_header_timeout, proxy_read_timeout, proxy_write_timeout, proxy_stream_timeout, proxy_flush_interval, proxy_stream_close_delay,
 			host_header, health_check_host, enable_tls, tls_cert,
@@ -2583,7 +2594,7 @@ func migrateLbRulesPrimaryKey() error {
 			health_check_path, health_check_interval, health_check_timeout,
 			health_check_unhealthy_threshold, health_check_healthy_threshold,
 			enable_active_health_check, tcp_health_check_port, tcp_proxy_protocol, tcp_try_duration, tcp_try_interval,
-			request_body_max_size_mb, upstream_keepalive_timeout, server_tokens_hidden,
+			request_body_max_size_mb, upstream_keepalive_timeout, server_tokens_hidden, COALESCE(ntlm_compatible,0), COALESCE(upstream_force_http1,0),
 			COALESCE(custom_routes_enabled,0),
 			COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0),
 			host_header, COALESCE(health_check_host,''), enable_tls, tls_cert,
@@ -3007,7 +3018,7 @@ func normalizeRuleTimestampsMigration() error {
 }
 
 // migrateTCPRuleDeadFields（2026-10-11 用户裁定「如果没有就都应该没有」）：
-// 主端存量 TCP 行的 HTTP 专属七字段死值清零——与 normalizeRuleForTransport
+// 主端存量 TCP 行的 HTTP 专属七字段+NTLM 开关死值清零——与 normalizeRuleForTransport
 // 传输归一同一清单。此前仅导出侧归一（CL10-P2-3「主端存储值不变」），用户
 // 裁定改为存储也归零：主端 DB、导出 canonical、从端落库三面同值，快照缓存
 // 的 canonical 变化由本迁移写侧触发 cluster_version bump 随下轮同步收敛。
@@ -3016,12 +3027,12 @@ func normalizeRuleTimestampsMigration() error {
 func migrateTCPRuleDeadFields() error {
 	res, err := DB.Exec(`UPDATE lb_rules SET
 		host_header='', health_check_path='', enable_compress=0, compress_types='',
-		request_body_max_size_mb=0, upstream_keepalive_timeout=0, server_tokens_hidden=0,
+		request_body_max_size_mb=0, upstream_keepalive_timeout=0, server_tokens_hidden=0, ntlm_compatible=0, upstream_force_http1=0,
 		enable_tls=0, tls_cert='', tls_key=''
 		WHERE protocol='tcp' AND (
 			COALESCE(host_header,'')<>'' OR COALESCE(health_check_path,'')<>''
 			OR enable_compress=1 OR COALESCE(compress_types,'')<>''
-			OR request_body_max_size_mb<>0 OR upstream_keepalive_timeout<>0 OR server_tokens_hidden<>0
+			OR request_body_max_size_mb<>0 OR upstream_keepalive_timeout<>0 OR server_tokens_hidden<>0 OR ntlm_compatible<>0 OR upstream_force_http1<>0
 			OR enable_tls=1
 		)`)
 	if err != nil {

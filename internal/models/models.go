@@ -116,42 +116,46 @@ func NewAPIKeyWithUserResponse(key APIKey, username string) APIKeyWithUserRespon
 
 // LbRule represents a load balancing rule
 type LbRule struct {
-	ID                            int        `json:"id"`
-	CaddyID                       string     `json:"caddy_id"`
-	Name                          string     `json:"name"`
-	Description                   string     `json:"description"`
-	Protocol                      string     `json:"protocol"`
-	Domain                        string     `json:"domain"`
-	ListenPort                    int        `json:"listen_port"`
-	Strategy                      string     `json:"strategy"`
-	DynamicDNS                    bool       `json:"dynamic_dns"`
-	EnableDnsServer               bool       `json:"enable_dns_server"`
-	DnsServer                     string     `json:"dns_server"`
-	DnsFamily                     string     `json:"dns_family"`
-	HealthCheckPath               string     `json:"health_check_path"`
-	HealthCheckInterval           int        `json:"health_check_interval"`
-	HealthCheckTimeout            int        `json:"health_check_timeout"`
-	HealthCheckUnhealthyThreshold int        `json:"health_check_unhealthy_threshold"`
-	HealthCheckHealthyThreshold   int        `json:"health_check_healthy_threshold"`
-	EnableActiveHealthCheck       bool       `json:"enable_active_health_check"`
-	TCPHealthCheckPort            int        `json:"tcp_health_check_port"`
-	TCPProxyProtocol              bool       `json:"tcp_proxy_protocol"`
-	TCPTryDuration                int        `json:"tcp_try_duration"`
-	TCPTryInterval                int        `json:"tcp_try_interval"`
-	RequestBodyMaxSizeMB          int        `json:"request_body_max_size_mb"`
-	UpstreamKeepaliveTimeout      int        `json:"upstream_keepalive_timeout"`
-	ServerTokensHidden            int        `json:"server_tokens_hidden"` // 0=default, 1=hide, 2=show
-	CustomRoutesEnabled           bool       `json:"custom_routes_enabled"`
-	ProxyDialTimeout              int        `json:"proxy_dial_timeout"`
-	ProxyResponseHeaderTimeout    int        `json:"proxy_response_header_timeout"`
-	ProxyReadTimeout              int        `json:"proxy_read_timeout"`
-	ProxyWriteTimeout             int        `json:"proxy_write_timeout"`
-	ProxyStreamTimeout            int        `json:"proxy_stream_timeout"`
-	ProxyFlushInterval            int        `json:"proxy_flush_interval"`
-	ProxyStreamCloseDelay         int        `json:"proxy_stream_close_delay"`
-	PathRules                     []PathRule `json:"path_rules"`
-	Upstreams                     []Upstream `json:"upstreams"`
-	HostHeader                    string     `json:"host_header"`
+	ID                            int    `json:"id"`
+	CaddyID                       string `json:"caddy_id"`
+	Name                          string `json:"name"`
+	Description                   string `json:"description"`
+	Protocol                      string `json:"protocol"`
+	Domain                        string `json:"domain"`
+	ListenPort                    int    `json:"listen_port"`
+	Strategy                      string `json:"strategy"`
+	DynamicDNS                    bool   `json:"dynamic_dns"`
+	EnableDnsServer               bool   `json:"enable_dns_server"`
+	DnsServer                     string `json:"dns_server"`
+	DnsFamily                     string `json:"dns_family"`
+	HealthCheckPath               string `json:"health_check_path"`
+	HealthCheckInterval           int    `json:"health_check_interval"`
+	HealthCheckTimeout            int    `json:"health_check_timeout"`
+	HealthCheckUnhealthyThreshold int    `json:"health_check_unhealthy_threshold"`
+	HealthCheckHealthyThreshold   int    `json:"health_check_healthy_threshold"`
+	EnableActiveHealthCheck       bool   `json:"enable_active_health_check"`
+	TCPHealthCheckPort            int    `json:"tcp_health_check_port"`
+	TCPProxyProtocol              bool   `json:"tcp_proxy_protocol"`
+	TCPTryDuration                int    `json:"tcp_try_duration"`
+	TCPTryInterval                int    `json:"tcp_try_interval"`
+	RequestBodyMaxSizeMB          int    `json:"request_body_max_size_mb"`
+	UpstreamKeepaliveTimeout      int    `json:"upstream_keepalive_timeout"`
+	ServerTokensHidden            int    `json:"server_tokens_hidden"` // 0=default, 1=hide, 2=show
+	// NTLM 兼容开关（2026-10-12）：1=按 NTLM 兼容形态渲染（保存门强制
+	// strategy=cookie）；仅 HTTP 语义，TCP 行恒 0。
+	NTLMCompatible             int        `json:"ntlm_compatible"`
+	UpstreamForceHTTP1         int        `json:"upstream_force_http1"`
+	CustomRoutesEnabled        bool       `json:"custom_routes_enabled"`
+	ProxyDialTimeout           int        `json:"proxy_dial_timeout"`
+	ProxyResponseHeaderTimeout int        `json:"proxy_response_header_timeout"`
+	ProxyReadTimeout           int        `json:"proxy_read_timeout"`
+	ProxyWriteTimeout          int        `json:"proxy_write_timeout"`
+	ProxyStreamTimeout         int        `json:"proxy_stream_timeout"`
+	ProxyFlushInterval         int        `json:"proxy_flush_interval"`
+	ProxyStreamCloseDelay      int        `json:"proxy_stream_close_delay"`
+	PathRules                  []PathRule `json:"path_rules"`
+	Upstreams                  []Upstream `json:"upstreams"`
+	HostHeader                 string     `json:"host_header"`
 	// 健康检查域名（2026-10-10）：主动健康检查 probe 的 Host 头；空=跟随 HostHeader。
 	HealthCheckHost string `json:"health_check_host"`
 	EnableTLS       bool   `json:"enable_tls"`
@@ -452,6 +456,8 @@ type CreateRuleRequest struct {
 	RequestBodyMaxSizeMB          int        `json:"request_body_max_size_mb"`
 	UpstreamKeepaliveTimeout      int        `json:"upstream_keepalive_timeout"`
 	ServerTokensHidden            int        `json:"server_tokens_hidden"` // 0=default, 1=hide, 2=show
+	NTLMCompatible                int        `json:"ntlm_compatible"`      // 0=off, 1=NTLM 兼容形态（要求 strategy=cookie）
+	UpstreamForceHTTP1            int        `json:"upstream_force_http1"` // 通用列：1=上游强制 HTTP/1.1（https 上游禁 ALPN h2）
 	CustomRoutesEnabled           bool       `json:"custom_routes_enabled"`
 	ProxyDialTimeout              int        `json:"proxy_dial_timeout"`
 	ProxyResponseHeaderTimeout    int        `json:"proxy_response_header_timeout"`
@@ -511,13 +517,16 @@ type UpdateRuleRequest struct {
 	// 零值落库（tcp_try_duration 0=不重试、tcp_try_interval 0=Caddy 默认间隔、
 	// tcp_health_check_port 0=跟随上游端口）。此前非指针 int 的「0=沿用存量」
 	// 合并使显式清零永不可达。
-	TCPHealthCheckPort         *int        `json:"tcp_health_check_port"`
-	TCPProxyProtocol           *bool       `json:"tcp_proxy_protocol"`
-	TCPTryDuration             *int        `json:"tcp_try_duration"`
-	TCPTryInterval             *int        `json:"tcp_try_interval"`
-	RequestBodyMaxSizeMB       *int        `json:"request_body_max_size_mb"`
-	UpstreamKeepaliveTimeout   *int        `json:"upstream_keepalive_timeout"`
-	ServerTokensHidden         *int        `json:"server_tokens_hidden"` // 0=default, 1=hide, 2=show
+	TCPHealthCheckPort       *int  `json:"tcp_health_check_port"`
+	TCPProxyProtocol         *bool `json:"tcp_proxy_protocol"`
+	TCPTryDuration           *int  `json:"tcp_try_duration"`
+	TCPTryInterval           *int  `json:"tcp_try_interval"`
+	RequestBodyMaxSizeMB     *int  `json:"request_body_max_size_mb"`
+	UpstreamKeepaliveTimeout *int  `json:"upstream_keepalive_timeout"`
+	ServerTokensHidden       *int  `json:"server_tokens_hidden"` // 0=default, 1=hide, 2=show
+	// NTLM 兼容开关：指针化——省略（nil）=保留原值，显式 0=关闭。
+	NTLMCompatible             *int        `json:"ntlm_compatible"`
+	UpstreamForceHTTP1         *int        `json:"upstream_force_http1"`
 	CustomRoutesEnabled        *bool       `json:"custom_routes_enabled"`
 	ProxyDialTimeout           *int        `json:"proxy_dial_timeout"`
 	ProxyResponseHeaderTimeout *int        `json:"proxy_response_header_timeout"`

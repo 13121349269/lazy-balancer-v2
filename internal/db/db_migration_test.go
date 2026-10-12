@@ -659,7 +659,9 @@ func TestMigrateLbRulesPrimaryKey_preserves_upstream_connection_settings(t *test
 			block_page_stage3_id INTEGER NOT NULL DEFAULT 0,
 			block_page_stage3_status INTEGER NOT NULL DEFAULT 0,
 			-- 真实启动序：ensureNewColumns 先于 PK 重建运行，重建只见补列后形态
-			health_check_host TEXT NOT NULL DEFAULT ''
+			health_check_host TEXT NOT NULL DEFAULT '',
+			ntlm_compatible INTEGER NOT NULL DEFAULT 0,
+			upstream_force_http1 INTEGER NOT NULL DEFAULT 0
 		);
 		CREATE TABLE upstreams (
 			id INTEGER PRIMARY KEY, rule_id INTEGER NOT NULL, host TEXT NOT NULL, port INTEGER NOT NULL,
@@ -1504,7 +1506,9 @@ func TestMigrateLbRulesPrimaryKey_rebuildsUpstreamEnabledNotNull(t *testing.T) {
 			block_page_stage3_id INTEGER NOT NULL DEFAULT 0,
 			block_page_stage3_status INTEGER NOT NULL DEFAULT 0,
 			-- 真实启动序：ensureNewColumns 先于 PK 重建运行，重建只见补列后形态
-			health_check_host TEXT NOT NULL DEFAULT ''
+			health_check_host TEXT NOT NULL DEFAULT '',
+			ntlm_compatible INTEGER NOT NULL DEFAULT 0,
+			upstream_force_http1 INTEGER NOT NULL DEFAULT 0
 		);
 		CREATE TABLE upstreams (
 			id INTEGER PRIMARY KEY, rule_id INTEGER NOT NULL, host TEXT NOT NULL, port INTEGER NOT NULL,
@@ -2642,7 +2646,9 @@ func TestInitialize_carriesUpstreamHostColumnsThroughPkRebuild(t *testing.T) {
 			block_page_stage1_status INTEGER NOT NULL DEFAULT 0,
 			block_page_stage3_id INTEGER NOT NULL DEFAULT 0,
 			block_page_stage3_status INTEGER NOT NULL DEFAULT 0,
-			health_check_host TEXT NOT NULL DEFAULT ''
+			health_check_host TEXT NOT NULL DEFAULT '',
+			ntlm_compatible INTEGER NOT NULL DEFAULT 0,
+			upstream_force_http1 INTEGER NOT NULL DEFAULT 0
 		);
 		CREATE TABLE upstreams (
 			id INTEGER PRIMARY KEY, rule_id INTEGER NOT NULL, host TEXT NOT NULL, port INTEGER NOT NULL,

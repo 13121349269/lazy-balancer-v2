@@ -857,6 +857,8 @@ func simulateLegacyNullableLbRules(t *testing.T, database *sql.DB) {
 		request_body_max_size_mb INTEGER DEFAULT 0,
 		upstream_keepalive_timeout INTEGER DEFAULT 0,
 		server_tokens_hidden INTEGER DEFAULT 0,
+		ntlm_compatible INTEGER DEFAULT 0,
+		upstream_force_http1 INTEGER DEFAULT 0,
 		custom_routes_enabled BOOLEAN NOT NULL DEFAULT 0,
 		proxy_dial_timeout INTEGER NOT NULL DEFAULT 0,
 		proxy_response_header_timeout INTEGER NOT NULL DEFAULT 0,

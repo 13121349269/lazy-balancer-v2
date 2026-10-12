@@ -52,5 +52,8 @@ func normalizeRuleForTransport(rule *models.LbRule) {
 		rule.RequestBodyMaxSizeMB = 0
 		rule.UpstreamKeepaliveTimeout = 0
 		rule.ServerTokensHidden = 0
+		// NTLM 兼容仅 HTTP 语义（2026-10-12）——与保存族/迁移族同一归一口径。
+		rule.NTLMCompatible = 0
+		rule.UpstreamForceHTTP1 = 0
 	}
 }

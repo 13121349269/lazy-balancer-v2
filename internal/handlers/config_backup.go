@@ -267,6 +267,7 @@ var backupTableNullDefaults = map[string]map[string]any{
 		"tcp_try_duration": int64(0), "tcp_try_interval": int64(250),
 		"request_body_max_size_mb": int64(0), "upstream_keepalive_timeout": int64(0),
 		"server_tokens_hidden": int64(0), "custom_routes_enabled": int64(0),
+		"ntlm_compatible": int64(0), "upstream_force_http1": int64(0),
 		"proxy_dial_timeout": int64(0), "proxy_response_header_timeout": int64(0), "proxy_read_timeout": int64(0),
 		"proxy_write_timeout": int64(0), "proxy_stream_timeout": int64(0), "proxy_flush_interval": int64(0),
 		"proxy_stream_close_delay": int64(0), "host_header": "", "health_check_host": "",
@@ -616,12 +617,12 @@ func restoreTable(ctx context.Context, tx *sql.Tx, database *sql.DB, table strin
 func normalizeRuleRowsForTransport(ctx context.Context, tx *sql.Tx) error {
 	if _, err := tx.ExecContext(ctx, `UPDATE lb_rules SET
 		host_header='', health_check_path='', enable_compress=0, compress_types='',
-		request_body_max_size_mb=0, upstream_keepalive_timeout=0, server_tokens_hidden=0,
+		request_body_max_size_mb=0, upstream_keepalive_timeout=0, server_tokens_hidden=0, ntlm_compatible=0, upstream_force_http1=0,
 		enable_tls=0, tls_cert='', tls_key=''
 		WHERE protocol='tcp' AND (
 			COALESCE(host_header,'')<>'' OR COALESCE(health_check_path,'')<>''
 			OR enable_compress=1 OR COALESCE(compress_types,'')<>''
-			OR request_body_max_size_mb<>0 OR upstream_keepalive_timeout<>0 OR server_tokens_hidden<>0
+			OR request_body_max_size_mb<>0 OR upstream_keepalive_timeout<>0 OR server_tokens_hidden<>0 OR ntlm_compatible<>0 OR upstream_force_http1<>0
 			OR enable_tls=1
 		)`); err != nil {
 		return fmt.Errorf("规则 TCP 死值归一失败: %w", err)
@@ -1169,6 +1170,7 @@ func validateV2BackupRules(tables map[string][]map[string]any) error {
 		input := ruleFeatureInput{
 			Protocol:                   protocol,
 			Strategy:                   backupString(rule["strategy"]),
+			NTLMCompatible:             backupInt(rule["ntlm_compatible"]),
 			DynamicDNS:                 backupBooleanEnabled(rule["dynamic_dns"]),
 			EnableDnsServer:            backupBooleanEnabled(rule["enable_dns_server"]),
 			DnsServer:                  backupString(rule["dns_server"]),

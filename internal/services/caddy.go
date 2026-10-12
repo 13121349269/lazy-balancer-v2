@@ -1276,6 +1276,8 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 		RequestBodyMaxSizeMB          int
 		UpstreamKeepaliveTimeout      int
 		ServerTokensHidden            int
+		NTLMCompatible                int
+		UpstreamForceHTTP1            int
 		CustomRoutesEnabled           bool
 		ProxyDialTimeout              int
 		ProxyResponseHeaderTimeout    int
@@ -1321,7 +1323,7 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 		       IIF(tls_http_redirect IN ('1',1),1,0),
 		       IIF(enabled IN ('1',1),1,0), IIF(enable_compress IN ('1',1),1,0), COALESCE(compress_types,'gzip'),
 		       IIF(enable_active_health_check IN ('1',1),1,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_proxy_protocol,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
-	       COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0), COALESCE(host_header,''), COALESCE(health_check_host,''),
+	       COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0), COALESCE(ntlm_compatible,0), COALESCE(upstream_force_http1,0), COALESCE(host_header,''), COALESCE(health_check_host,''),
 		       IIF(log_enabled IN ('1',1),1,0), IIF(custom_routes_enabled IN ('1',1),1,0),
 		       COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0),
 		       COALESCE(block_page_stage1_id,0), COALESCE(block_page_stage1_status,0), COALESCE(block_page_stage3_id,0), COALESCE(block_page_stage3_status,0)
@@ -1341,7 +1343,7 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 			&r.EnableTLS, &r.TLSSource, &r.ACMEConfigID, &r.TLSCert, &r.TLSKey,
 			&r.TLSHTTPRedirect, &r.Enabled, &r.EnableCompress, &r.CompressTypes,
 			&r.EnableActiveHealthCheck, &r.TCPHealthCheckPort, &r.TCPProxyProtocol, &r.TCPTryDuration, &r.TCPTryInterval,
-			&r.RequestBodyMaxSizeMB, &r.UpstreamKeepaliveTimeout, &r.ServerTokensHidden, &r.HostHeader, &r.HealthCheckHost, &r.LogEnabled,
+			&r.RequestBodyMaxSizeMB, &r.UpstreamKeepaliveTimeout, &r.ServerTokensHidden, &r.NTLMCompatible, &r.UpstreamForceHTTP1, &r.HostHeader, &r.HealthCheckHost, &r.LogEnabled,
 			&r.CustomRoutesEnabled, &r.ProxyDialTimeout, &r.ProxyResponseHeaderTimeout,
 			&r.ProxyReadTimeout, &r.ProxyWriteTimeout, &r.ProxyStreamTimeout, &r.ProxyFlushInterval, &r.ProxyStreamCloseDelay,
 			&r.BlockPageStage1ID, &r.BlockPageStage1Status, &r.BlockPageStage3ID, &r.BlockPageStage3Status)
@@ -1712,7 +1714,10 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 				RequestBodyMaxSizeMB:             r.RequestBodyMaxSizeMB,
 				UpstreamKeepaliveTimeout:         r.UpstreamKeepaliveTimeout,
 				ServerTokensHidden:               r.ServerTokensHidden,
-				GlobalRequestBodyMaxSizeMB:       global.requestBodyMaxSizeMB,
+				NTLMCompatible:                   r.NTLMCompatible,
+				UpstreamForceHTTP1:               r.UpstreamForceHTTP1,
+				TCPTryDuration:                   r.TCPTryDuration,
+				TCPTryInterval:                   r.TCPTryInterval,
 				GlobalUpstreamKeepaliveTimeout:   global.upstreamKeepaliveTimeout,
 				GlobalServerTokensHidden:         global.serverTokensHidden,
 				CustomRoutesEnabled:              r.CustomRoutesEnabled,
@@ -2440,6 +2445,8 @@ type SingleRuleConfig struct {
 	RequestBodyMaxSizeMB           int
 	UpstreamKeepaliveTimeout       int
 	ServerTokensHidden             int
+	NTLMCompatible                 int
+	UpstreamForceHTTP1             int
 	GlobalRequestBodyMaxSizeMB     int
 	GlobalUpstreamKeepaliveTimeout int
 	GlobalServerTokensHidden       bool
@@ -3687,11 +3694,28 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 		} else if rule.Strategy == "weighted_round_robin" {
 			selectionPolicy["weights"] = normalizeWeights(upstreamWeights)
 		}
-		proxyConfig["load_balancing"] = map[string]interface{}{
+		// 重试窗口（方案 C，2026-10-12 裁定——HTTP 与 TCP 值语义通用，零存量行为变化）：
+		// td>0 → 按值发射窗口+间隔（间隔缺省 250ms）；td==0 → 保持现状兜底 5s/250ms
+		// （存量 HTTP 行恒 0，行为不变）；td==-1 → 显式禁用重试——发射 retries=0
+		// 且不发射 try_duration/try_interval（NTLM 接管态由 UI 修改器落 -1，渲染
+		// 对 ntlm_compatible 零感知）。
+		loadBalancing := map[string]interface{}{
 			"selection_policy": selectionPolicy,
-			"try_duration":     "5s",
-			"try_interval":     "250ms",
 		}
+		if rule.TCPTryDuration > 0 {
+			tryInterval := rule.TCPTryInterval
+			if tryInterval <= 0 {
+				tryInterval = 250
+			}
+			loadBalancing["try_duration"] = fmt.Sprintf("%dms", rule.TCPTryDuration)
+			loadBalancing["try_interval"] = fmt.Sprintf("%dms", tryInterval)
+		} else if rule.TCPTryDuration == -1 {
+			loadBalancing["retries"] = 0
+		} else {
+			loadBalancing["try_duration"] = "5s"
+			loadBalancing["try_interval"] = "250ms"
+		}
+		proxyConfig["load_balancing"] = loadBalancing
 	}
 
 	if rule.Protocol == "http" {
@@ -3760,7 +3784,7 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 	if timeouts.streamCloseDelay > 0 {
 		proxyConfig["stream_close_delay"] = fmt.Sprintf("%ds", timeouts.streamCloseDelay)
 	}
-	needsTransport := hasHTTPSUpstream || rule.EnableDnsServer || effectiveUpstreamKeepaliveTimeout > 0 || timeouts.dial > 0 || timeouts.responseHeader > 0 || timeouts.read > 0 || timeouts.write > 0
+	needsTransport := hasHTTPSUpstream || rule.EnableDnsServer || effectiveUpstreamKeepaliveTimeout > 0 || timeouts.dial > 0 || timeouts.responseHeader > 0 || timeouts.read > 0 || timeouts.write > 0 || (rule.UpstreamForceHTTP1 == 1 && hasHTTPSUpstream)
 	if needsTransport {
 		transportConfig := map[string]interface{}{"protocol": "http"}
 		if hasHTTPSUpstream {
@@ -3777,6 +3801,14 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 			transportConfig["tls"] = map[string]interface{}{
 				"insecure_skip_verify": true,
 				"server_name":          serverName,
+			}
+			if rule.UpstreamForceHTTP1 == 1 {
+				// 上游强制 HTTP/1.1（通用列，2026-10-12）：Caddy HTTPTransport.Versions
+				// （modules/caddyhttp/reverseproxy/httptransport.go）——限定协议版本集即
+				// 禁用 h2（TLS 上游同时从 ALPN 剔除 h2）。语义比 tls.alpn_protocols 准确
+				// （后者只影响 ALPN 握手、不管 h2c 协商）。仅 https 上游输出：
+				// http 明文无 ALPN/协商面（用户裁定）。
+				transportConfig["versions"] = []string{"1.1"}
 			}
 		}
 		if rule.EnableDnsServer && rule.DnsServer != "" {

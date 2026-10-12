@@ -767,6 +767,8 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		req.RequestBodyMaxSizeMB = 0
 		req.UpstreamKeepaliveTimeout = 0
 		req.ServerTokensHidden = 0
+		// NTLM 兼容仅 HTTP 语义——TCP 创建携带 ntlm_compatible=1 由保存门
+		// （validateRuleFeatures）显式 400 拒绝，不做静默弃置（2026-10-12 定稿）。
 		// U3-1:阶段页 4 列仅 http 渲染消费——tcp 创建携带页引用即归一 0
 		// (跟随策略),不留永不消费的死引用。
 		req.BlockPageStage1ID, req.BlockPageStage1Status = 0, 0
@@ -955,18 +957,18 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 			health_check_path, health_check_interval, health_check_timeout,
 			health_check_unhealthy_threshold, health_check_healthy_threshold,
 			enable_active_health_check, tcp_health_check_port, tcp_proxy_protocol, tcp_try_duration, tcp_try_interval,
-		request_body_max_size_mb, upstream_keepalive_timeout, server_tokens_hidden,
+		request_body_max_size_mb, upstream_keepalive_timeout, server_tokens_hidden, ntlm_compatible, upstream_force_http1,
 		custom_routes_enabled,
 		proxy_dial_timeout, proxy_response_header_timeout, proxy_read_timeout, proxy_write_timeout, proxy_stream_timeout, proxy_flush_interval, proxy_stream_close_delay,
 		host_header, health_check_host, enable_tls, tls_source, acme_config_id, ca_provider_id, tls_cert, tls_key, tls_http_redirect,
 		enable_compress, compress_types, enabled, created_by, updated_at, caddy_id, log_enabled,
 		block_page_stage1_id, block_page_stage1_status, block_page_stage3_id, block_page_stage3_status)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, req.Name, req.Description, req.Protocol, req.Domain, req.ListenPort, req.Strategy, req.DynamicDNS, req.EnableDnsServer, req.DnsServer, req.DnsFamily,
 		req.HealthCheckPath, req.HealthCheckInterval, req.HealthCheckTimeout,
 		req.HealthCheckUnhealthyThreshold, req.HealthCheckHealthyThreshold,
 		req.EnableActiveHealthCheck, req.TCPHealthCheckPort, req.TCPProxyProtocol, req.TCPTryDuration, req.TCPTryInterval,
-		req.RequestBodyMaxSizeMB, req.UpstreamKeepaliveTimeout, req.ServerTokensHidden,
+		req.RequestBodyMaxSizeMB, req.UpstreamKeepaliveTimeout, req.ServerTokensHidden, req.NTLMCompatible, req.UpstreamForceHTTP1,
 		features.CustomRoutesEnabled,
 		features.ProxyDialTimeout, features.ProxyResponseHeaderTimeout, features.ProxyReadTimeout, features.ProxyWriteTimeout, features.ProxyStreamTimeout, features.ProxyFlushInterval, features.ProxyStreamCloseDelay,
 		req.HostHeader, req.HealthCheckHost, req.EnableTLS, req.TLSSource, req.ACMEConfigID, req.CAProviderID, req.TLSCert, req.TLSKey,
@@ -1165,7 +1167,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			COALESCE(health_check_path,''), COALESCE(health_check_interval,10), COALESCE(health_check_timeout,2),
 			COALESCE(health_check_unhealthy_threshold,3), COALESCE(health_check_healthy_threshold,2),
 			COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_proxy_protocol,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
-		COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0),
+	COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0), COALESCE(ntlm_compatible,0), COALESCE(upstream_force_http1,0),
 		COALESCE(custom_routes_enabled,0),
 		COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0),
 		COALESCE(host_header,''), COALESCE(health_check_host,''), COALESCE(enable_compress,1), COALESCE(compress_types,'gzip'),
@@ -1179,7 +1181,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		&existingRule.HealthCheckPath, &existingRule.HealthCheckInterval, &existingRule.HealthCheckTimeout,
 		&existingRule.HealthCheckUnhealthyThreshold, &existingRule.HealthCheckHealthyThreshold,
 		&existingRule.EnableActiveHealthCheck, &existingRule.TCPHealthCheckPort, &existingRule.TCPProxyProtocol, &existingRule.TCPTryDuration, &existingRule.TCPTryInterval,
-		&existingRule.RequestBodyMaxSizeMB, &existingRule.UpstreamKeepaliveTimeout, &existingRule.ServerTokensHidden,
+		&existingRule.RequestBodyMaxSizeMB, &existingRule.UpstreamKeepaliveTimeout, &existingRule.ServerTokensHidden, &existingRule.NTLMCompatible, &existingRule.UpstreamForceHTTP1,
 		&existingRule.CustomRoutesEnabled,
 		&existingRule.ProxyDialTimeout, &existingRule.ProxyResponseHeaderTimeout, &existingRule.ProxyReadTimeout, &existingRule.ProxyWriteTimeout, &existingRule.ProxyStreamTimeout, &existingRule.ProxyFlushInterval, &existingRule.ProxyStreamCloseDelay,
 		&existingRule.HostHeader, &existingRule.HealthCheckHost, &existingRule.EnableCompress, &existingRule.CompressTypes,
@@ -1297,6 +1299,12 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	if req.ServerTokensHidden == nil {
 		req.ServerTokensHidden = &existingRule.ServerTokensHidden
 	}
+	if req.NTLMCompatible == nil {
+		req.NTLMCompatible = &existingRule.NTLMCompatible
+	}
+	if req.UpstreamForceHTTP1 == nil {
+		req.UpstreamForceHTTP1 = &existingRule.UpstreamForceHTTP1
+	}
 	if req.DynamicDNS == nil {
 		req.DynamicDNS = &existingRule.DynamicDNS
 	}
@@ -1367,6 +1375,10 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			req.RequestBodyMaxSizeMB = &zero
 			req.UpstreamKeepaliveTimeout = &zero
 			req.ServerTokensHidden = &zero
+			// NTLM 仅 HTTP 语义：协议切到 TCP 即归零（与 cookie 策略改写同格）。
+			req.NTLMCompatible = &zero
+			// 上游强制 HTTP/1.1 是 HTTP 传输语义——切 TCP 同步弃置。
+			req.UpstreamForceHTTP1 = &zero
 			req.CustomRoutesEnabled = &disabled
 			emptyPathRules := []models.PathRule{}
 			req.PathRules = &emptyPathRules
@@ -1426,6 +1438,9 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		req.RequestBodyMaxSizeMB = &tcpZero
 		req.UpstreamKeepaliveTimeout = &tcpZero
 		req.ServerTokensHidden = &tcpZero
+		// NTLM 仅 HTTP 语义：TCP 编辑（含存量残留）自愈归零。
+		req.NTLMCompatible = &tcpZero
+		req.UpstreamForceHTTP1 = &tcpZero
 		req.EnableTLS = &tcpDisabled
 		req.TLSSource = "manual"
 		req.TLSCert, req.TLSKey = "", ""
@@ -1715,6 +1730,10 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	args = append(args, *req.UpstreamKeepaliveTimeout)
 	query += "server_tokens_hidden = ?, "
 	args = append(args, *req.ServerTokensHidden)
+	query += "ntlm_compatible = ?, "
+	args = append(args, *req.NTLMCompatible)
+	query += "upstream_force_http1 = ?, "
+	args = append(args, *req.UpstreamForceHTTP1)
 	query += "custom_routes_enabled = ?, "
 	args = append(args, features.CustomRoutesEnabled)
 	query += "proxy_dial_timeout = ?, "
@@ -2420,6 +2439,8 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		rule.RequestBodyMaxSizeMB = 0
 		rule.UpstreamKeepaliveTimeout = 0
 		rule.ServerTokensHidden = 0
+		rule.NTLMCompatible = 0
+		rule.UpstreamForceHTTP1 = 0
 	}
 
 	userIDInt := contextUserID(c)
@@ -2470,6 +2491,8 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		ProxyReadTimeout: rule.ProxyReadTimeout, ProxyWriteTimeout: rule.ProxyWriteTimeout,
 		ProxyStreamTimeout: rule.ProxyStreamTimeout, ProxyFlushInterval: rule.ProxyFlushInterval,
 		ProxyStreamCloseDelay: rule.ProxyStreamCloseDelay,
+		NTLMCompatible:        rule.NTLMCompatible,
+		UpstreamForceHTTP1:    rule.UpstreamForceHTTP1,
 		// U3-4:TCP 三字段随负值门接入——复制路径与 CreateRule/UpdateRule 同校验
 		// (Round 38 B3 契约),不留绕行口。
 		TCPHealthCheckPort: rule.TCPHealthCheckPort,
@@ -2508,18 +2531,18 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 			health_check_path, health_check_interval, health_check_timeout,
 			health_check_unhealthy_threshold, health_check_healthy_threshold,
 			enable_active_health_check, tcp_health_check_port, tcp_proxy_protocol, tcp_try_duration, tcp_try_interval,
-			request_body_max_size_mb, upstream_keepalive_timeout, server_tokens_hidden,
+			request_body_max_size_mb, upstream_keepalive_timeout, server_tokens_hidden, ntlm_compatible, upstream_force_http1,
 			enable_tls, tls_source, acme_config_id, ca_provider_id, tls_cert, tls_key,
 	tls_http_redirect, enable_compress, compress_types, enabled, created_by, updated_by, created_at, updated_at, host_header, health_check_host, log_enabled, caddy_id,
 		custom_routes_enabled,
 		proxy_dial_timeout, proxy_response_header_timeout, proxy_read_timeout, proxy_write_timeout, proxy_stream_timeout, proxy_flush_interval, proxy_stream_close_delay,
 		block_page_stage1_id, block_page_stage1_status, block_page_stage3_id, block_page_stage3_status)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, rule.Name+"（副本）", rule.Description, rule.Protocol, rule.Domain, rule.ListenPort, rule.Strategy,
 		rule.DynamicDNS, rule.EnableDnsServer, rule.DnsServer, rule.DnsFamily, rule.HealthCheckPath, rule.HealthCheckInterval, rule.HealthCheckTimeout,
 		rule.HealthCheckUnhealthyThreshold, rule.HealthCheckHealthyThreshold,
 		rule.EnableActiveHealthCheck, rule.TCPHealthCheckPort, rule.TCPProxyProtocol, rule.TCPTryDuration, rule.TCPTryInterval,
-		rule.RequestBodyMaxSizeMB, rule.UpstreamKeepaliveTimeout, rule.ServerTokensHidden,
+		rule.RequestBodyMaxSizeMB, rule.UpstreamKeepaliveTimeout, rule.ServerTokensHidden, rule.NTLMCompatible, rule.UpstreamForceHTTP1,
 		rule.EnableTLS, rule.TLSSource, rule.ACMEConfigID, rule.CAProviderID, rule.TLSCert, rule.TLSKey,
 		rule.TLSHTTPRedirect, rule.EnableCompress, rule.CompressTypes, 0, userIDInt, userIDInt,
 		now, now, rule.HostHeader, rule.HealthCheckHost, rule.LogEnabled, newCaddyID,
