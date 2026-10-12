@@ -610,15 +610,14 @@
               <el-divider content-position="left" class="compact-divider">NTLM 兼容</el-divider>
 
               <el-form-item label="NTLM 兼容">
-                <template #label>NTLM 兼容
-                  <FieldHelpIcon popper-class="ntlm-help-popper">
+                <template #label><span>NTLM 兼容<FieldHelpIcon popper-class="ntlm-help-popper">
                     <template #content>
                       <div class="ntlm-help-line">适用场景：Exchange / AD / 旧版 IIS 等使用 NTLM / 协商认证的后端</div>
                       <div class="ntlm-help-line">已知限制：</div>
                       <div class="ntlm-help-line">· 若后端协商到 Kerberos，建议不改写 Host</div>
                       <div class="ntlm-help-line">· 入口 HTTP/2 由客户端自动降级，不受本开关控制</div>
                     </template>
-                  </FieldHelpIcon>
+                  </FieldHelpIcon></span>
                 </template>
                 <div class="ntlm-switch-control">
                   <el-switch :model-value="ntlmOn" @change="onNtlmToggle" />
@@ -653,7 +652,8 @@
               <el-form-item label="主动检查">
                 <div class="active-check-control">
                   <el-switch v-model="wizardForm.enable_active_health_check" :disabled="ntlmOn" />
-                  <span v-if="ntlmOn" class="form-tip-inline" style="margin-left: 8px;"><TakeoverBadge />{{ ntlmOn
+                  <TakeoverBadge v-if="ntlmOn" />
+                  <span class="form-tip-inline">{{ ntlmOn
                     ? '已关闭：NTLM 后端探测返回 401 会被误判摘除；被动健康检查仍在役'
                     : (wizardForm.enable_active_health_check ? '周期探测，异常节点持续摘除直至恢复（推荐）' : '仅被动熔断，异常节点会周期恢复并重新接收流量') }}</span>
                 </div>
@@ -777,7 +777,8 @@
               <el-form-item label="强制 HTTP/1.1">
                 <div class="active-check-control">
                   <el-switch v-model="wizardForm.upstream_force_http1" :active-value="1" :inactive-value="0" :disabled="ntlmOn" />
-                  <span v-if="ntlmOn" class="form-tip-inline" style="margin-left: 8px;"><TakeoverBadge />后端不支持 HTTP/2 或使用 NTLM 认证时开启；仅对 https 上游生效</span>
+                  <TakeoverBadge v-if="ntlmOn" />
+                  <span class="form-tip-inline">后端不支持 HTTP/2 或使用 NTLM 认证时开启；仅对 https 上游生效</span>
                 </div>
               </el-form-item>
             </template>
