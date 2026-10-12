@@ -104,15 +104,6 @@
           </el-select>
           <div class="form-tip-line">引用「规则集 → IP 地址列表」中的可复用列表，条目与上方内联网段合并生效（合计 {{ trustedRangesTotalCount }} 条，上限 2000）</div>
         </el-form-item>
-        <el-form-item v-if="trustedRangesEmpty">
-          <el-alert
-            type="warning"
-            :closable="false"
-            show-icon
-            title="受信网段为空：所有真实 IP 请求头将被忽略"
-            description="开启受信代理但内联与引用列表均为空时，任何来源的 X-Forwarded-For 等头都不会被采信（按连接来源 IP 判定）"
-          />
-        </el-form-item>
         <el-form-item label="请求头">
           <el-select
             v-model="trustedHeaders"
@@ -211,14 +202,15 @@
 
   <el-dialog
     v-model="saveListDialogVisible"
-    title="存为地址列表"
     width="min(480px, 92vw)"
     append-to-body
     :close-on-click-modal="false"
     :close-on-press-escape="!savingList"
     :show-close="!savingList"
   >
-    <div class="info-note-bar"><span class="info-note-desc">将创建列表并清空内联网段，改为引用后语义不变；仍需点击「保存」提交配置</span></div>
+    <template #header>
+      <DialogHeader :icon="Tickets" title="存为地址列表" subtitle="内联网段转为可复用的共享 IP 列表" />
+    </template>
     <el-form label-width="80px" @submit.prevent>
       <el-form-item label="来源">
         <span>当前内联网段（{{ trustedRanges.length }} 条）</span>
@@ -380,7 +372,6 @@ onMounted(() => { void fetchIpLists() })
 // 空警告与合计：引用侧条数按选项缓存 entry_count 汇总（与后端展开上限同口径）
 const referencedEntryCount = computed(() => trustedRangeRefs.value.reduce((sum, id) => sum + (ipLists.value.find((l) => l.id === id)?.entry_count ?? 0), 0))
 const trustedRangesTotalCount = computed(() => trustedRanges.value.length + referencedEntryCount.value)
-const trustedRangesEmpty = computed(() => settings.value.trusted_proxy_enabled && trustedRangesTotalCount.value === 0)
 
 // —— 存为列表：内联网段一键建名单并转为引用（镜像策略侧「提取为列表」） ——
 const saveListDialogVisible = ref(false)
@@ -447,17 +438,6 @@ const updateProxyTimeout = (field: keyof ProxyTimeoutConfig, value: number): voi
 
 const handleSave = async (): Promise<void> => {
   if (isReadOnly.value || saving.value) return
-  // 空警告（2026-10-12 用户裁定口径）：开启受信代理且（内联+引用展开）为空
-  // → 保存前显式确认——该形态下所有真实 IP 头都会被忽略
-  if (trustedRangesEmpty.value) {
-    try {
-      await ElMessageBox.confirm('受信网段为空 = 所有真实 IP 请求头将被忽略（按连接来源 IP 判定）。确定继续保存？', '受信网段为空', {
-        confirmButtonText: '仍然保存', cancelButtonText: '返回修改', type: 'warning',
-      })
-    } catch {
-      return
-    }
-  }
   saving.value = true
   try {
     // 显式白名单：settings 是与 BasicSettings 共享的同一对象，全量展开会把
