@@ -29,30 +29,102 @@ const securityTimingHeader = "X-Lb-Security-Timing-Id"
 // reverse_proxy 上游往返)。与 timing ID 头同清单剥离。
 const securityTimingStartHeader = "X-Lb-Security-Timing-Start-Ns"
 
-// securityTimingFileMu/Fd 惰性打开的追加写句柄——首写时 OpenFile,进程生命周期
-// 复用;打开失败静默降级(耗时缺失,不阻断请求);目录不存在时 MkdirAll 兜底。
+// securityTimingStateMu/securityTimingCh 等是耗时侧车的写管线状态——PLUG-N1
+// （第 72 轮）：原「单锁串行 Fprintf」让每个计时写点在请求路径上排队等
+// 磁盘 I/O（安全链每请求 2-3 个写点，高并发下锁竞争+写盘时延直接叠加进
+// 请求耗时）。改造为有界缓冲 channel + 专职写 goroutine：Append 只做
+// 非阻塞入队（满则丢弃——耗时是增强信息，可丢不可堵）；写 goroutine 惰性
+// 打开 fd（打开失败丢行、下一行重试，保持原静默降级语义），串行落盘。
+// 生命周期由三个写点 handler（blocked_counter/timing_pre/timing_end）的
+// Provision/Cleanup 引用计数启停：最后一个 Cleanup 关闭 channel 并排空
+// 落盘后退出，重载期新旧配置并存时引用计数保证写管线不断。
 var (
-	securityTimingMu sync.Mutex
-	securityTimingFd *os.File
+	securityTimingStateMu sync.RWMutex
+	securityTimingCh      chan string   // 在役时非 nil；nil=写管线未启动（Append 静默丢弃）
+	securityTimingDone    chan struct{} // 写 goroutine 排空退出时关闭
+	securityTimingRefs    int           // 在役写点 handler 数
+	// securityTimingQueueSize 队列容量——超限丢弃（防抖盘打爆内存的反向
+	// 也一样成立：4096 行 × 约 30B ≈ 120KB 上限）。var 供测试收窄。
+	securityTimingQueueSize = 4096
 )
 
+// securityTimingWriterAcquire/securityTimingWriterRelease 由写点 handler 的
+// Provision/Cleanup 调用（引用计数启停写管线）。
+func securityTimingWriterAcquire() {
+	securityTimingStateMu.Lock()
+	defer securityTimingStateMu.Unlock()
+	securityTimingRefs++
+	if securityTimingCh != nil {
+		return
+	}
+	ch := make(chan string, securityTimingQueueSize)
+	done := make(chan struct{})
+	securityTimingCh = ch
+	securityTimingDone = done
+	go securityTimingWriter(ch, done)
+}
+
+func securityTimingWriterRelease() {
+	securityTimingStateMu.Lock()
+	if securityTimingRefs > 0 {
+		securityTimingRefs--
+	}
+	if securityTimingRefs != 0 || securityTimingCh == nil {
+		securityTimingStateMu.Unlock()
+		return
+	}
+	ch := securityTimingCh
+	done := securityTimingDone
+	securityTimingCh = nil
+	securityTimingDone = nil
+	securityTimingStateMu.Unlock()
+	// close 与 Append 的入队互斥（入队持 RLock，此处持 Lock 完成关闭后才
+	// 有后续入队读到 nil 丢弃），不会 send-on-closed。排空等待在锁外——
+	// Cleanup 路径可阻塞，请求路径不经此。
+	close(ch)
+	<-done
+}
+
+// securityTimingWriter 专职落盘 goroutine：惰性打开 fd（失败丢行、下一行
+// 重试，静默降级语义不变），channel 关闭后排空剩余行再退出。
+func securityTimingWriter(ch <-chan string, done chan<- struct{}) {
+	defer close(done)
+	var fd *os.File
+	defer func() {
+		if fd != nil {
+			_ = fd.Close()
+		}
+	}()
+	for line := range ch {
+		if fd == nil {
+			_ = os.MkdirAll(filepath.Dir(securityTimingLogPath), 0755)
+			f, err := os.OpenFile(securityTimingLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+			if err != nil {
+				continue
+			}
+			fd = f
+		}
+		_, _ = fmt.Fprintln(fd, line)
+	}
+}
+
 // AppendSecurityTiming 追加一行「<id> <us>」到耗时侧车日志(写侧:blocked_counter/timing_pre/timing_end 三点)。
-// 任何 I/O 失败静默降级——耗时是增强信息,不产生任何请求路径错误。
+// 非阻塞入队：队列满或写管线未启动（无写点 handler 在役）时静默丢弃——
+// 耗时是增强信息,不产生任何请求路径错误、不阻塞请求路径。
 func AppendSecurityTiming(id string, durationUs int64) {
 	if id == "" {
 		return
 	}
-	securityTimingMu.Lock()
-	defer securityTimingMu.Unlock()
-	if securityTimingFd == nil {
-		_ = os.MkdirAll(filepath.Dir(securityTimingLogPath), 0755)
-		f, err := os.OpenFile(securityTimingLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-		if err != nil {
-			return
-		}
-		securityTimingFd = f
+	line := id + " " + strconv.FormatInt(durationUs, 10)
+	securityTimingStateMu.RLock()
+	defer securityTimingStateMu.RUnlock()
+	if securityTimingCh == nil {
+		return
 	}
-	_, _ = fmt.Fprintf(securityTimingFd, "%s %d\n", id, durationUs)
+	select {
+	case securityTimingCh <- line:
+	default: // 队列满丢弃
+	}
 }
 
 // recordSecurityTiming 读耗时关联头对（timing ID + 起始纳秒）并记录一段耗时——

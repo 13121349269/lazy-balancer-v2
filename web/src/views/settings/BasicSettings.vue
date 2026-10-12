@@ -20,7 +20,7 @@
             <span class="form-tip-inline">控制 Lazy Balancer 自身日志详细程度</span>
           </el-form-item>
           <el-form-item label="任务日志大小">
-            <el-input-number v-model="settings.cert_job_log_size_mb" :disabled="isReadOnly" :min="1" :max="1024" controls-position="right" style="width: 120px;" />
+            <el-input-number v-model="settings.task_log_size_mb" :disabled="isReadOnly" :min="1" :max="1024" controls-position="right" style="width: 120px;" />
             <span class="form-tip-inline">MB，任务与库更新日志轮转阈值</span>
           </el-form-item>
           <el-form-item label="审计日志大小">
@@ -1109,7 +1109,7 @@ const confirmImport = async (): Promise<void> => {
 
 interface BasicSettingsConfig {
   log_level: string
-  cert_job_log_size_mb: number
+  task_log_size_mb: number
   audit_log_size_mb: number
   runtime_log_size_mb: number
   audit_retention_months: number
@@ -1390,7 +1390,7 @@ const handleSave = async () => {
   try {
     const payload = {
       log_level: settings.value.log_level,
-      cert_job_log_size_mb: settings.value.cert_job_log_size_mb,
+      task_log_size_mb: settings.value.task_log_size_mb,
       audit_log_size_mb: settings.value.audit_log_size_mb,
       runtime_log_size_mb: settings.value.runtime_log_size_mb,
       audit_retention_months: settings.value.audit_retention_months,

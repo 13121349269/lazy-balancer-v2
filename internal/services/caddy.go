@@ -1252,6 +1252,8 @@ func expandTrustedProxyRanges(store caddyConfigStore, inline []string, refsJSON 
 
 // mergeTrustedProxyServerFields 把受信代理字段并入每个 HTTP server 条目
 // （含 :80 默认站）；layer4/admin 不在此函数视野内，天然不注入。
+// 产出为共享实例（fields 同一份 map 经 maps.Copy 逐键并入各 server，
+// 值内嵌套结构仍被多 server 共享引用）——消费方禁变异，如需改动须先深拷贝。
 func mergeTrustedProxyServerFields(servers map[string]interface{}, store caddyConfigStore) {
 	fields := trustedProxyServerFields(store)
 	if len(fields) == 0 {
@@ -3760,11 +3762,12 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 		} else if rule.Strategy == "weighted_round_robin" {
 			selectionPolicy["weights"] = normalizeWeights(upstreamWeights)
 		}
-		// 重试窗口（方案 C，2026-10-12 裁定——HTTP 与 TCP 值语义通用，零存量行为变化）：
-		// td>0 → 按值发射窗口+间隔（间隔缺省 250ms）；td==0 → 保持现状兜底 5s/250ms
-		// （存量 HTTP 行恒 0，行为不变）；td==-1 → 显式禁用重试——发射 retries=0
-		// 且不发射 try_duration/try_interval（NTLM 接管态由 UI 修改器落 -1，渲染
-		// 对 ntlm_compatible 零感知）。
+		// 重试窗口（方案 C，2026-10-12 裁定——HTTP 与 TCP 值域通用（[-1,60000]），
+		// 但 td==0/-1 渲染语义按协议分叉）：td>0 → 按值发射窗口+间隔（间隔缺省
+		// 250ms）；HTTP 侧 td==0 → 保持现状兜底 5s/250ms（存量 HTTP 行恒 0，行为
+		// 不变）；HTTP 侧 td==-1 → 显式禁用重试——发射 retries=0 且不发射
+		// try_duration/try_interval；TCP 侧 td==0/-1 均零窗口不发射（l4 proxy 无
+		// retries 字段）。NTLM 接管态由 UI 修改器落 -1，渲染对 ntlm_compatible 零感知。
 		loadBalancing := map[string]interface{}{
 			"selection_policy": selectionPolicy,
 		}

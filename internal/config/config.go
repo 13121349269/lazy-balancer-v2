@@ -124,8 +124,16 @@ func getEnv(key, defaultValue string) string {
 
 func loadOrCreateJWTSecret(dataDir string) string {
 	secretPath := filepath.Join(dataDir, "jwt_secret")
-	if data, err := os.ReadFile(secretPath); err == nil && len(data) >= 32 {
-		return string(data)
+	if data, err := os.ReadFile(secretPath); err == nil {
+		if len(data) >= 32 {
+			return string(data)
+		}
+		if len(data) > 0 {
+			// ADNS-N1（第 72 轮）：非空过短密钥的覆写必须可见——此前静默
+			// 重生成，旧令牌全部失效且零日志信号；与下方目录/写失败分支
+			// 及端口回退的可见性准则对齐。空文件等同未初始化，不告警。
+			log.Printf("JWT 密钥文件 %s 内容过短（%d 字节 < 32），已重新生成（旧令牌将失效）", secretPath, len(data))
+		}
 	}
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {

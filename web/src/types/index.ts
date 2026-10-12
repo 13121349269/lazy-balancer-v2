@@ -268,7 +268,7 @@ export interface GlobalConfigData {
   proxy_flush_interval: number
   proxy_stream_close_delay: number
   server_tokens_hidden: boolean
-  cert_job_log_size_mb: number
+  task_log_size_mb: number
   audit_log_size_mb: number
   runtime_log_size_mb: number
   access_log_json: boolean

@@ -161,7 +161,7 @@
 | UI 文案（BasicSettings 等） | 存储 key（global_config） | 消费点（已核实） | 渲染回路 | 结论 |
 |---|---|---|---|---|
 | 日志级别 | `log_level` | `services.ApplyLogLevel`、`shouldLogRequest`（middleware.go:462-471） | 保存后 `ApplyLogLevel` 即时生效 | ✅ |
-| 任务日志大小 | `cert_job_log_size_mb` | certjob/CRS/IP2Region 更新日志轮转；`logstats.go:109-111` 标注同一键 | LogStorageBar 显示「满 N 轮转保留 5 份」 | ✅ |
+| 任务日志大小 | `task_log_size_mb` | certjob/CRS/IP2Region 更新日志轮转；`logstats.go:109-111` 标注同一键 | LogStorageBar 显示「满 N 轮转保留 5 份」 | ✅ |
 | 审计日志大小 | `audit_log_size_mb` | **Coraza WAF 审计日志**轮转阈值（`auditlog_rotation.go` getAuditLogSizeBytes）；UI 提示已明确「WAF 审计日志」 | `logstats.go:115`（key=coraza_audit） | ✅ 语义链一致；但 UI max=1024 vs 后端 512 → S-3 |
 | 运行日志大小 | `runtime_log_size_mb` | 运行日志轮转（main.go:78-80 启动） | `logstats.go:112` | ✅ |
 | 日志保留 | `audit_retention_months` | 操作日志 `CleanupAuditLogs`（auditlog.go:132-148，每日）、安全事件保留（securityevents_retention.go:35-39）、运行日志轮转副本（logrotate.go:187-190） | `logstats.go:103` retentionNote | ✅（提示文案「操作/运行/安全事件」与三个消费点吻合） |

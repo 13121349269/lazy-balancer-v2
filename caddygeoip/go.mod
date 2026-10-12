@@ -169,7 +169,10 @@ require (
 	google.golang.org/grpc/cmd/protoc-gen-go-grpc v1.6.2 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 	howett.net/plist v1.0.1 // indirect
+	lazy-balancer-v2/geoipnames v0.0.0
 	lazy-balancer-v2/wafiplist v0.0.0
 )
 
 replace lazy-balancer-v2/wafiplist => ../wafiplist
+
+replace lazy-balancer-v2/geoipnames => ../geoipnames

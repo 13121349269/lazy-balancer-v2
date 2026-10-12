@@ -13,10 +13,10 @@ import (
 	"time"
 )
 
-type temporaryAcceptError struct{}
+type temporaryAcceptError struct{ timeout bool }
 
 func (temporaryAcceptError) Error() string   { return "temporary accept error" }
-func (temporaryAcceptError) Timeout() bool   { return true }
+func (e temporaryAcceptError) Timeout() bool { return e.timeout }
 func (temporaryAcceptError) Temporary() bool { return true }
 
 type acceptResult struct {
@@ -181,10 +181,10 @@ func TestHTTPRedirectMux_Accept_backsOffTemporaryErrorsAndResetsAfterSuccess(t *
 		_ = listener.Close()
 	})
 	for range 9 {
-		listener.results <- acceptResult{err: temporaryAcceptError{}}
+		listener.results <- acceptResult{err: temporaryAcceptError{timeout: true}}
 	}
 	listener.results <- acceptResult{connection: serverConnection}
-	listener.results <- acceptResult{err: temporaryAcceptError{}}
+	listener.results <- acceptResult{err: temporaryAcceptError{timeout: true}}
 	listener.results <- acceptResult{err: errors.New("permanent accept error")}
 	var delays []time.Duration
 	mux := newHTTPRedirectMuxWithSleeper(listener, func(delay time.Duration) {
@@ -212,5 +212,37 @@ func TestHTTPRedirectMux_Accept_backsOffTemporaryErrorsAndResetsAfterSuccess(t *
 		if delays[i] != want[i] {
 			t.Fatalf("backoff delays=%v, want %v", delays, want)
 		}
+	}
+}
+
+func TestHTTPRedirectMux_Accept_backsOffTemporaryErrorsWithoutTimeout(t *testing.T) {
+	// Given: Temporary()=true 但 Timeout()=false（如 EMFILE 类 accept 瞬时失败），
+	// 必须退避重试而非终结 mux。
+	listener := &fakeListener{
+		results:  make(chan acceptResult, 4),
+		accepted: make(chan struct{}, 4),
+		closed:   make(chan struct{}),
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	listener.results <- acceptResult{err: temporaryAcceptError{timeout: false}}
+	slept := make(chan struct{}, 8)
+	mux := newHTTPRedirectMuxWithSleeper(listener, func(time.Duration) {
+		slept <- struct{}{}
+	})
+
+	// When：等待退避发生；若 mux 终结则判失败。
+	select {
+	case <-slept:
+	case <-mux.done:
+		t.Fatal("mux finished on temporary non-timeout accept error")
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("mux did not back off on temporary non-timeout accept error")
+	}
+
+	// Then：退避后 dispatch 回到 Accept 继续阻塞等待，mux 未终结。
+	select {
+	case <-mux.done:
+		t.Fatal("mux finished after backoff on temporary non-timeout accept error")
+	case <-time.After(50 * time.Millisecond):
 	}
 }

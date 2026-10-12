@@ -60,12 +60,7 @@
             <span class="rule-field-label">
               上游路径
               <!-- 语义说明合并为单一 tooltip:留空语义 + 前缀/精确改写示例 -->
-              <el-tooltip placement="top">
-                <template #content>
-                  留空=原样转发；填写后改写转发路径。前缀匹配 /api + /v1 → /api/users 变 /v1/users（剥匹配前缀后前置）；精确匹配则转发路径整体替换为该值
-                </template>
-                <el-icon class="field-hint-icon" aria-label="上游路径改写说明"><QuestionFilled /></el-icon>
-              </el-tooltip>
+              <FieldHelpIcon content="留空=原样转发；填写后改写转发路径。前缀匹配 /api + /v1 → /api/users 变 /v1/users（剥匹配前缀后前置）；精确匹配则转发路径整体替换为该值" />
             </span>
             <div class="rule-field-control">
               <el-input
@@ -179,7 +174,8 @@
 </template>
 
 <script setup lang="ts">
-import { ArrowDown, ArrowUp, Delete, Plus, QuestionFilled } from '@element-plus/icons-vue'
+import { ArrowDown, ArrowUp, Delete, Plus } from '@element-plus/icons-vue'
+import FieldHelpIcon from '@/components/common/FieldHelpIcon.vue'
 import type { PathRule, PathRuleUpstream } from '@/types'
 import { MAX_UPSTREAM_ROWS, normalizeWeights, redistributeWeight } from '@/utils/upstreamWeights'
 import { canonicalPathKey } from '@/utils/ruleValidation'
@@ -369,7 +365,6 @@ const onWeightChange = (rule: PathRule, index: number): void => {
 /* 报错间距恒定预留（2026-09-21 用户裁定）：错误/提示文案绝对定位于字段下方预留带内,
    出现与否不改变任何兄弟区块位置,三字段基线对齐恒定 */
 .rule-field-control { position: relative; display: flex; min-width: 0; flex: 1; flex-direction: column; margin-bottom: 18px; }
-.field-hint-icon { color: var(--el-text-color-placeholder); cursor: help; }
 .path-rule-actions { display: flex; align-items: center; gap: 4px; }
 .path-rule-actions :deep(.el-button + .el-button) { margin-left: 0; }
 /* 响应方式行 + 直接返回/301 跳转字段行（2026-10-10） */

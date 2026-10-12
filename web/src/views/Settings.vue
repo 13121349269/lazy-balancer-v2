@@ -87,7 +87,7 @@ const settings = ref<SettingsConfig>({
   proxy_flush_interval: 0,
   proxy_stream_close_delay: 0,
   server_tokens_hidden: false,
-  cert_job_log_size_mb: 10,
+  task_log_size_mb: 10,
   audit_log_size_mb: 10,
   runtime_log_size_mb: 100,
   access_log_json: true,
@@ -140,7 +140,7 @@ type ConfigPayload = SettingsConfig & CertificateConfig
 
 const applyBasicKeys = (data: ConfigPayload) => {
   settings.value.log_level = data.log_level || 'info'
-  settings.value.cert_job_log_size_mb = data.cert_job_log_size_mb ?? 10
+  settings.value.task_log_size_mb = data.task_log_size_mb ?? 10
   settings.value.audit_log_size_mb = data.audit_log_size_mb ?? 10
   settings.value.runtime_log_size_mb = data.runtime_log_size_mb ?? 100
   settings.value.audit_retention_months = data.audit_retention_months ?? 3

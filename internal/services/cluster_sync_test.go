@@ -1950,8 +1950,6 @@ func TestWafFilesDrifted_nullRefAppliedHashExempt(t *testing.T) {
 	// 模拟主节点无文件的已应用哈希(payload=纯 ref=nil → sha256("null"))
 	seedAppliedWafRefHash(t, database, wafFilesNullRefHash)
 	// 从节点残留一个文件(本地 ref 非 nil)
-	rescue := func(dir string, path string, content string) { t.Helper() }
-	_ = rescue
 	oldCrs, oldXdb := crsLiveDir, ip2regionLivePath
 	tmp := t.TempDir()
 	crsLiveDir, ip2regionLivePath = filepath.Join(tmp, "crs"), filepath.Join(tmp, "ip2region.xdb")

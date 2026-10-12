@@ -145,7 +145,7 @@
                  备份未启用）——业务关时开关显示「已暂停」，状态列不再用 disabled 表达 -->
             <!-- LN-1（第 72 轮）：cert-waiting-ca 默认调度关闭、续期扫描入队
                  唤醒——开关上加 tooltip 说明自动唤醒语义（页内既有 tooltip 范式） -->
-            <el-tooltip v-else-if="row.id === 'cert-waiting-ca'" content="有证书任务入队时自动唤醒" placement="top" :offset="8" :show-after="150" :show-arrow="false">
+            <el-tooltip v-if="row.id === 'cert-waiting-ca'" content="有证书任务入队时自动唤醒" placement="top" :offset="8" :show-after="150" :show-arrow="false">
               <el-switch :model-value="!!row.loop_on && row.enabled !== false" :disabled="!canOperate" @change="(v: string | number | boolean) => onToggle(row, !!v)" />
             </el-tooltip>
             <el-switch v-else-if="row.kind !== 'oneshot'" :model-value="!!row.loop_on && row.enabled !== false" :disabled="!canOperate" @change="(v: string | number | boolean) => onToggle(row, !!v)" />

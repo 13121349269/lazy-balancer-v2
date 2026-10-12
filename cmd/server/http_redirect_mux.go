@@ -73,7 +73,7 @@ func (m *httpRedirectMux) dispatch() {
 	for {
 		connection, err := m.Listener.Accept()
 		if err != nil {
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			if netErr, ok := err.(net.Error); ok && (netErr.Timeout() || netErr.Temporary()) {
 				if retryDelay == 0 {
 					retryDelay = 5 * time.Millisecond
 				} else {

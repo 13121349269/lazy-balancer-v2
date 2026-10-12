@@ -4041,14 +4041,6 @@ onUnmounted(() => {
   gap: 8px;
 }
 
-.ntlm-help-icon {
-  color: #e6a23c;
-  cursor: help;
-  font-size: 15px;
-}
-
-
-
 .active-check-control {
   display: flex;
   align-items: center;

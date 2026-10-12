@@ -17,6 +17,7 @@ import (
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 	"github.com/lionsoul2014/ip2region/binding/golang/service"
 	"go.uber.org/zap"
+	"lazy-balancer-v2/geoipnames"
 )
 
 func init() {
@@ -95,6 +96,18 @@ var geoipOldInstanceCloseDelay = 60 * time.Second
 func sharedGeoIPSearcher(path string) (*service.Ip2Region, error) {
 	st, err := os.Stat(path)
 	if err != nil {
+		// PLUG-N2（第 72 轮）：stat 失败（xdb 更新 rename 窗口/文件被删）且
+		// 缓存持有该路径条目时驱逐之——旧实例走既有 AfterFunc 延迟关闭
+		// （在途查询保护与换库路径一致）。不驱逐则旧 inode 实例永久占据
+		// 缓存槽：文件以「同 modtime+size」形态恢复（rsync -a 保时间戳重铺）
+		// 时缓存命中判定通过，被删 inode 的旧库被无限期当有效数据服务。
+		geoipSharedMu.Lock()
+		if cached, ok := geoipSharedSearchers[path]; ok {
+			old := cached.searcher
+			delete(geoipSharedSearchers, path)
+			time.AfterFunc(geoipOldInstanceCloseDelay, func() { old.Close() })
+		}
+		geoipSharedMu.Unlock()
 		return nil, err
 	}
 	geoipSharedMu.Lock()
@@ -211,7 +224,7 @@ func (h *GeoIPHandler) setGeoIPPlaceholders(r *http.Request) {
 	// 会导致「广东省/广州市」类城市级规则对这些段恒不命中。
 	// 台湾城市误入省列的段：城市名在省列（城市列是该段的乱码罗马化值）——
 	// 城市变量改发省列值，与树侧归并语义一致，使「台湾省/台中市」可命中。
-	if rawProv := strings.TrimSpace(fields[1]); taiwanCities[rawProv] {
+	if rawProv := strings.TrimSpace(fields[1]); geoipnames.TaiwanCities[rawProv] {
 		city = rawProv
 	} else if c := strings.TrimSpace(fields[2]); c != "" && c != "0" {
 		city = normalizeCity(c)
@@ -250,53 +263,23 @@ func realClientIP(r *http.Request) string {
 	return host
 }
 
-// provinceAliases 与 internal/services/ip2region.go 的 ip2ProvinceAliases 同款
-// （叶子 Caddy 模块不可 import internal 包，小表复制，修改需两侧同步）。
-var provinceAliases = map[string]string{
-	// R72 二十六次 W3-4：与 internal/services/ip2region.go 的 ip2ProvinceAliases
-	// 逐条镜像（此前缺 11 条恒等映射与港澳台——无行为分歧但同步不变量破坏；
-	// 修改需两侧同步）。
-	// (UEruemqi, Wulumuqi) 段的省列乱码转写——按新疆发射（与树侧同步）。
-	"UEruemqi": "新疆维吾尔自治区",
-	"北京":       "北京市", "上海市": "上海市", "上海": "上海市", "天津市": "天津市", "天津": "天津市",
-	"重庆市": "重庆市", "重庆": "重庆市",
-	"广西壮族自治区": "广西壮族自治区", "广西": "广西壮族自治区",
-	"内蒙古自治区": "内蒙古自治区", "内蒙古": "内蒙古自治区",
-	"西藏自治区": "西藏自治区", "西藏": "西藏自治区",
-	"宁夏回族自治区": "宁夏回族自治区", "宁夏": "宁夏回族自治区",
-	"新疆维吾尔自治区": "新疆维吾尔自治区", "新疆": "新疆维吾尔自治区",
-	"台湾省": "台湾省", "台湾": "台湾省",
-	"香港特别行政区": "香港特别行政区", "澳门特别行政区": "澳门特别行政区",
-}
-
-var taiwanCities = map[string]bool{
-	"台北市": true, "新北市": true, "台中市": true, "台南市": true, "高雄市": true,
-	"基隆市": true, "新竹市": true, "嘉义市": true, "新竹县": true, "彰化县": true,
-	"桃园市": true, "云林县": true, "苗栗县": true,
-}
+// 规范化四张表（省别名/台湾城市/拼音城市/自治州）单源在
+// lazy-balancer-v2/geoipnames（PLUG-N3 第 72 轮收敛——此前与
+// internal/services 手工镜像双份，靠解析对侧源文本的镜像测试防漂移；
+// 中立叶模块经根/caddygeoip 双 replace 接线，与 wafiplist 同模式）。
 
 // normalizeProvince 规范 xdb 省列原始值；不可识别（乱码）原样返回（不出现在
 // 选项树中，策略不会配置）；台湾城市误入省列时省变量按台湾省发射、城市变量
 // 改发省列值（见 setGeoIPPlaceholders——该类段的城市列是乱码值）。
-// cityPinyinFixes 与 internal/services/ip2region.go 的 ip2PinyinCityFixes 同款
-// （叶子 Caddy 模块不可 import internal 包，表复制，修改需两侧同步）。xdb 部分
-// 段的城市列为拼音/英文形态，发射前映射为规范中文名，使城市级 CEL 规则可命中。
-var cityPinyinFixes = map[string]string{
-	"Wulumuqi": "乌鲁木齐市", "Shanghai": "上海市", "Beijing": "北京市",
-	"Fengyuan": "丰原市", "Taipei City": "台北市", "Zhongli District": "中坜区",
-	"Changchun Shi": "长春市", "Chengdu Shi": "成都市", "Tianjin": "天津市",
-	"Fuyang Shi": "阜阳市", "Hefei Shi": "合肥市", "Heze Shi": "菏泽市",
-	"Jining Shi": "济宁市", "Linyi Xian": "临沂县", "Weifang Shi": "潍坊市",
-	"Dongguan Shi": "东莞市", "Foshan Shi": "佛山市", "Guangzhou Shi": "广州市",
-	"Maoming Shi": "茂名市", "Shenzhen": "深圳市", "Zhuhai Shi": "珠海市",
-	"Nanning Shi": "南宁市", "Nanjing Shi": "南京市", "Nantong Shi": "南通市",
-	"Tongshan": "铜山区", "Yancheng Shi": "盐城市", "Ganzhou Shi": "赣州市",
-	"Baoding Shi": "保定市", "Hanshan Qu": "含山区", "Langfang Shi": "廊坊市",
-	"Shijiazhuang Shi": "石家庄市", "Nanyang Shi": "南阳市", "Zhengzhou Shi": "郑州市",
-	"Zhoukou Shi": "周口市", "Zhumadian Shi": "驻马店市", "Ningbo Shi": "宁波市",
-	"Wuhan Shi": "武汉市", "Xiangyang": "襄阳市", "Changsha Shi": "长沙市",
-	"Hengyang Xian": "衡阳县", "Shenyang Shi": "沈阳市", "Chongqing": "重庆市",
-	"Guozhen": "郭镇", "Xi'an Shi": "西安市", "Kowloon": "九龙",
+func normalizeProvince(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if canonical, ok := geoipnames.ProvinceAliases[trimmed]; ok {
+		return canonical
+	}
+	if geoipnames.TaiwanCities[trimmed] {
+		return "台湾省"
+	}
+	return trimmed
 }
 
 // normalizeCity 规范 xdb 城市列原始值：拼音映射表命中返回规范中文；未映射的
@@ -307,53 +290,12 @@ func normalizeCity(raw string) string {
 	if trimmed == "" || trimmed == "0" {
 		return ""
 	}
-	if fixed, ok := cityPinyinFixes[trimmed]; ok {
+	if fixed, ok := geoipnames.CityPinyinFixes[trimmed]; ok {
 		return fixed
 	}
-	// R72 二十八次：少数民族自治州简称 → 全称（与树侧同款表同步）。
-	if full, ok := autonomousPrefectures[trimmed]; ok {
+	// R72 二十八次：少数民族自治州简称 → 全称（geoipnames.AutonomousPrefectures）。
+	if full, ok := geoipnames.AutonomousPrefectures[trimmed]; ok {
 		return full
 	}
 	return trimmed
-}
-
-func normalizeProvince(raw string) string {
-	trimmed := strings.TrimSpace(raw)
-	if canonical, ok := provinceAliases[trimmed]; ok {
-		return canonical
-	}
-	if taiwanCities[trimmed] {
-		return "台湾省"
-	}
-	return trimmed
-}
-
-// autonomousPrefectures（与 internal/services/ip2region.go 的 ip2AutonomousPrefectures
-// 同款表同步维护；R72 二十八次，用户反馈：「大理/怒江/凉山缺市字」——
-// 实为少数民族自治州的简称）xdb 对自治州存简称、对普通地级市存全称
-// （如「呼和浩特市」），选项树里「大理」与「呼和浩特市」并列显得缺字。
-// 简称 → 全称 映射；与 internal/services/ip2region.go 的 ip2AutonomousPrefectures 同款表同步维护。
-// 注意不可盲加「市」：「大理市」是另一个县级市，全称是「大理白族自治州」。
-// 港澳的「九龙/将军澳/新界/香港岛/澳门」是地区名非城市，不在此表（保持原值）。
-var autonomousPrefectures = map[string]string{
-	// 云南（8 个自治州）
-	"大理": "大理白族自治州", "怒江": "怒江傈僳族自治州", "楚雄": "楚雄彝族自治州",
-	"红河": "红河哈尼族彝族自治州", "文山": "文山壮族苗族自治州", "西双版纳": "西双版纳傣族自治州",
-	"德宏": "德宏傣族景颇族自治州", "迪庆": "迪庆藏族自治州",
-	// 四川（3）
-	"凉山": "凉山彝族自治州", "甘孜": "甘孜藏族自治州", "阿坝": "阿坝藏族羌族自治州",
-	// 贵州（3）
-	"黔东南": "黔东南苗族侗族自治州", "黔南": "黔南布依族苗族自治州", "黔西南": "黔西南布依族苗族自治州",
-	// 湖南/湖北/吉林（3）
-	"湘西": "湘西土家族苗族自治州", "恩施": "恩施土家族苗族自治州", "延边": "延边朝鲜族自治州",
-	// 新疆（5）
-	"伊犁": "伊犁哈萨克自治州", "昌吉": "昌吉回族自治州", "巴音郭楞": "巴音郭楞蒙古自治州",
-	"克孜勒苏": "克孜勒苏柯尔克孜自治州", "博尔塔拉": "博尔塔拉蒙古自治州",
-	// 青海（6）
-	"海西": "海西蒙古族藏族自治州", "海北": "海北藏族自治州", "黄南": "黄南藏族自治州",
-	"海南": "海南藏族自治州", "果洛": "果洛藏族自治州", "玉树": "玉树藏族自治州",
-	// 甘肃（2）
-	"临夏": "临夏回族自治州", "甘南": "甘南藏族自治州",
-	// 地区（1：xdb 缺「地区」后缀）
-	"大兴安岭": "大兴安岭地区",
 }

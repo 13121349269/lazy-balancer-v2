@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"lazy-balancer-v2/geoipnames"
 	"lazy-balancer-v2/internal/db"
 
 	ip2regionService "github.com/lionsoul2014/ip2region/binding/golang/service"
@@ -316,37 +317,14 @@ func GetIP2RegionProvinceList() []string {
 	return provinces
 }
 
-// ip2ProvinceAliases 省列别名规范化（R72 二十三次）：xdb 原始省列存在双形态
-// （上海/上海市、广西/广西壮族自治区）、台湾城市误入省列（台中市等）与个别
-// 乱码（UEruemqi）。选项树与 CEL 发射变量（caddygeoip 同款表，见
-// caddygeoip/handler.go 的 sync 注释）统一用规范名，两边一致才能命中。
+// 省列/城市列规范化四张表（别名/台湾城市/拼音城市/自治州）单源在
+// lazy-balancer-v2/geoipnames（PLUG-N3 第 72 轮收敛——此前与 caddygeoip
+// 手工镜像双份，漂移曾致城市级地域规则静默恒不命中）。选项树与 CEL 发射
+// 变量统一用规范名，两边一致才能命中。
 // treeCacheRevision 地域树缓存修订号——规范化规则（映射/别名/结构）变更时
 // 递增，旧缓存据此判定过期重建。ASCII 残留探测只能发现「缓存里有脏数据」，
 // 发现不了「该有而没有」的条目（如 r25 前整段被丢的 新疆/乌鲁木齐市）。
 const treeCacheRevision = "r26" // r26：自治州简称→全称（大理→大理白族自治州）
-
-var ip2ProvinceAliases = map[string]string{
-	// v3.17.0 段 (UEruemqi, Wulumuqi)：省列是城市名 Ürümqi 的乱码转写、城市列
-	// 拼音已可映射——别名把该段回收为 新疆维吾尔自治区/乌鲁木齐市（此前整段
-	// 被丢弃，树缺这对省市）。发射侧 provinceAliases 同步。
-	"UEruemqi": "新疆维吾尔自治区",
-	"北京":       "北京市", "上海市": "上海市", "上海": "上海市", "天津市": "天津市", "天津": "天津市",
-	"重庆市": "重庆市", "重庆": "重庆市",
-	"广西壮族自治区": "广西壮族自治区", "广西": "广西壮族自治区",
-	"内蒙古自治区": "内蒙古自治区", "内蒙古": "内蒙古自治区",
-	"西藏自治区": "西藏自治区", "西藏": "西藏自治区",
-	"宁夏回族自治区": "宁夏回族自治区", "宁夏": "宁夏回族自治区",
-	"新疆维吾尔自治区": "新疆维吾尔自治区", "新疆": "新疆维吾尔自治区",
-	"台湾省": "台湾省", "台湾": "台湾省",
-	"香港特别行政区": "香港特别行政区", "澳门特别行政区": "澳门特别行政区",
-}
-
-// ip2TaiwanCities 台湾地区在 xdb 中误置于省列的城市——归入台湾省城市集。
-var ip2TaiwanCities = map[string]bool{
-	"台北市": true, "新北市": true, "台中市": true, "台南市": true, "高雄市": true,
-	"基隆市": true, "新竹市": true, "嘉义市": true, "新竹县": true, "彰化县": true,
-	"桃园市": true, "云林县": true, "苗栗县": true,
-}
 
 // normalizeIP2Province 把 xdb 省列原始值规范化为规范省名：别名表归一（上海→
 // 上海市）、带「省」后缀原样通过；其余候选（精简 fixture 的「广东」、潜在非
@@ -357,10 +335,10 @@ func normalizeIP2Province(raw string) string {
 	if trimmed == "" || trimmed == "0" {
 		return ""
 	}
-	if canonical, ok := ip2ProvinceAliases[trimmed]; ok {
+	if canonical, ok := geoipnames.ProvinceAliases[trimmed]; ok {
 		return canonical
 	}
-	if ip2TaiwanCities[trimmed] {
+	if geoipnames.TaiwanCities[trimmed] {
 		return ""
 	}
 	// ASCII 省名是乱码/拼音残片（如 UEruemqi），xdb 中文省列恒为多字节——
@@ -371,29 +349,6 @@ func normalizeIP2Province(raw string) string {
 	return trimmed
 }
 
-// ip2PinyinCityFixes xdb 部分段的城市列为拼音/英文形态（v3.17.0 实测 45 条，
-// 如 Guangzhou Shi/Shanghai/Taipei City）——映射为规范中文名；不在此表的
-// ASCII 城市直接过滤（宁缺勿乱，无法可靠音译）。R72 二十五次起发射侧
-// （caddygeoip normalizeCity）用同款表同步映射——城市级 CEL 规则对拼音段
-// 可命中，两侧表修改需同步。
-var ip2PinyinCityFixes = map[string]string{
-	"Wulumuqi": "乌鲁木齐市", "Shanghai": "上海市", "Beijing": "北京市",
-	"Fengyuan": "丰原市", "Taipei City": "台北市", "Zhongli District": "中坜区",
-	"Changchun Shi": "长春市", "Chengdu Shi": "成都市", "Tianjin": "天津市",
-	"Fuyang Shi": "阜阳市", "Hefei Shi": "合肥市", "Heze Shi": "菏泽市",
-	"Jining Shi": "济宁市", "Linyi Xian": "临沂县", "Weifang Shi": "潍坊市",
-	"Dongguan Shi": "东莞市", "Foshan Shi": "佛山市", "Guangzhou Shi": "广州市",
-	"Maoming Shi": "茂名市", "Shenzhen": "深圳市", "Zhuhai Shi": "珠海市",
-	"Nanning Shi": "南宁市", "Nanjing Shi": "南京市", "Nantong Shi": "南通市",
-	"Tongshan": "铜山区", "Yancheng Shi": "盐城市", "Ganzhou Shi": "赣州市",
-	"Baoding Shi": "保定市", "Hanshan Qu": "含山区", "Langfang Shi": "廊坊市",
-	"Shijiazhuang Shi": "石家庄市", "Nanyang Shi": "南阳市", "Zhengzhou Shi": "郑州市",
-	"Zhoukou Shi": "周口市", "Zhumadian Shi": "驻马店市", "Ningbo Shi": "宁波市",
-	"Wuhan Shi": "武汉市", "Xiangyang": "襄阳市", "Changsha Shi": "长沙市",
-	"Hengyang Xian": "衡阳县", "Shenyang Shi": "沈阳市", "Chongqing": "重庆市",
-	"Guozhen": "郭镇", "Xi'an Shi": "西安市", "Kowloon": "九龙",
-}
-
 // normalizeIP2City 规范城市列：拼音映射为中文；无法映射的 ASCII 城市返回空
 // （过滤）。中文城市原样通过。
 func normalizeIP2City(raw string) string {
@@ -401,11 +356,11 @@ func normalizeIP2City(raw string) string {
 	if trimmed == "" || trimmed == "0" {
 		return ""
 	}
-	if fixed, ok := ip2PinyinCityFixes[trimmed]; ok {
+	if fixed, ok := geoipnames.CityPinyinFixes[trimmed]; ok {
 		return fixed
 	}
-	// R72 二十八次：少数民族自治州简称 → 全称（见 ip2AutonomousPrefectures）。
-	if full, ok := ip2AutonomousPrefectures[trimmed]; ok {
+	// R72 二十八次：少数民族自治州简称 → 全称（见 geoipnames.AutonomousPrefectures）。
+	if full, ok := geoipnames.AutonomousPrefectures[trimmed]; ok {
 		return full
 	}
 	if trimmed[0] < 0x80 {
@@ -489,7 +444,7 @@ func regionTreeFromXDB(path string) *IP2RegionRegionTree {
 		if prov == "" {
 			// 台湾城市误入省列：归入台湾省城市集（其省列值即城市名）。
 			rawProv := strings.TrimSpace(fields[1])
-			if ip2TaiwanCities[rawProv] {
+			if geoipnames.TaiwanCities[rawProv] {
 				provinces["台湾省"] = true
 				set := cities["台湾省"]
 				if set == nil {
@@ -652,35 +607,6 @@ func writeRegionTreeCache(tree *IP2RegionRegionTree) {
 		cityTotal += len(cities)
 	}
 	WriteIP2RegionUpdateLog("INFO", "idle", fmt.Sprintf("地域树缓存已重建：%d 省级 / %d 城市（未映射 ASCII 段已过滤：省 %d / 城市 %d）", len(tree.Provinces), cityTotal, tree.DroppedASCIIProvinces, tree.DroppedASCIICities))
-}
-
-// ip2AutonomousPrefectures（R72 二十八次，用户反馈：「大理/怒江/凉山缺市字」——
-// 实为少数民族自治州的简称）xdb 对自治州存简称、对普通地级市存全称
-// （如「呼和浩特市」），选项树里「大理」与「呼和浩特市」并列显得缺字。
-// 简称 → 全称 映射；与 caddygeoip 侧 normalizeCity 同款表同步维护。
-// 注意不可盲加「市」：「大理市」是另一个县级市，全称是「大理白族自治州」。
-// 港澳的「九龙/将军澳/新界/香港岛/澳门」是地区名非城市，不在此表（保持原值）。
-var ip2AutonomousPrefectures = map[string]string{
-	// 云南（8 个自治州）
-	"大理": "大理白族自治州", "怒江": "怒江傈僳族自治州", "楚雄": "楚雄彝族自治州",
-	"红河": "红河哈尼族彝族自治州", "文山": "文山壮族苗族自治州", "西双版纳": "西双版纳傣族自治州",
-	"德宏": "德宏傣族景颇族自治州", "迪庆": "迪庆藏族自治州",
-	// 四川（3）
-	"凉山": "凉山彝族自治州", "甘孜": "甘孜藏族自治州", "阿坝": "阿坝藏族羌族自治州",
-	// 贵州（3）
-	"黔东南": "黔东南苗族侗族自治州", "黔南": "黔南布依族苗族自治州", "黔西南": "黔西南布依族苗族自治州",
-	// 湖南/湖北/吉林（3）
-	"湘西": "湘西土家族苗族自治州", "恩施": "恩施土家族苗族自治州", "延边": "延边朝鲜族自治州",
-	// 新疆（5）
-	"伊犁": "伊犁哈萨克自治州", "昌吉": "昌吉回族自治州", "巴音郭楞": "巴音郭楞蒙古自治州",
-	"克孜勒苏": "克孜勒苏柯尔克孜自治州", "博尔塔拉": "博尔塔拉蒙古自治州",
-	// 青海（6）
-	"海西": "海西蒙古族藏族自治州", "海北": "海北藏族自治州", "黄南": "黄南藏族自治州",
-	"海南": "海南藏族自治州", "果洛": "果洛藏族自治州", "玉树": "玉树藏族自治州",
-	// 甘肃（2）
-	"临夏": "临夏回族自治州", "甘南": "甘南藏族自治州",
-	// 地区（1：xdb 缺「地区」后缀）
-	"大兴安岭": "大兴安岭地区",
 }
 
 // RebuildRegionTreeCacheForSync 供集群同步/lbbak 导入路径在 xdb 变更后调用

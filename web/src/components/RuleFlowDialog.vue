@@ -128,9 +128,9 @@
                 <span class="flow-row-label">{{ row.label }}</span>
                 <span class="flow-row-detail" :title="row.detail">{{ row.detail }}</span>
               </div>
-              <div v-if="trustPreview(group.key)" class="flow-row">
+              <div v-if="group.preview" class="flow-row">
                 <span class="flow-row-label">条目预览</span>
-                <span class="flow-row-detail" :title="trustPreview(group.key)">{{ trustPreview(group.key) }}</span>
+                <span class="flow-row-detail" :title="group.preview">{{ group.preview }}</span>
               </div>
               <el-collapse-transition>
                 <div v-if="expandedPolicyKey === `0:${group.key}`" class="flow-policy-details">
@@ -410,7 +410,7 @@ const fullPolicies = ref<Map<number, SecurityStagePolicyDetail>>(new Map())
 // 引用名单条目按需缓存（2026-09-24：列表载荷不再内联 entries——大名单
 // 460KB/行；明细展开时按引用 id 拉 GET /security/ip-lists/:id）
 const ipListEntryCache = ref<Map<number, Array<{ value: string; remark?: string }>>>(new Map())
-// 富化名单视图 = 摘要列表 + 已拉取条目的覆盖层（attachStageDetails/trustPreview 消费）
+// 富化名单视图 = 摘要列表 + 已拉取条目的覆盖层（attachStageDetails/stageZero 组级 preview 消费）
 const enrichedIpLists = computed(() => props.ipLists.map((l) =>
   ipListEntryCache.value.has(l.id) ? { ...l, entries: ipListEntryCache.value.get(l.id) } : l,
 ))
@@ -428,8 +428,25 @@ const displayModel = computed<RuleStageModel | null>(() => {
   })
 })
 
-// 阶段 0 卡与 1/2/3 同构恒出（未绑定信任策略=灰态「未启用」，面板显示未启用说明）
-const stageZero = computed<StageGroup | undefined>(() => displayModel.value?.stages.find((s) => s.stage === 0 && s.enabled))
+// 阶段 0 卡与 1/2/3 同构恒出（未绑定信任策略=灰态「未启用」，面板显示未启用说明）。
+// 组级 preview 在此预聚合：原实现模板每行 3 次调用 trustPreview、每次全量
+// find+parse+merge；现随 displayModel/策略/名单缓存变化每组计算一次，模板直读。
+type StageZeroGroup = StagePolicyGroup & { preview: string }
+type StageZeroPanel = Omit<StageGroup, 'groups'> & { groups: StageZeroGroup[] }
+const stageZero = computed<StageZeroPanel | undefined>(() => {
+  const stage = displayModel.value?.stages.find((s) => s.stage === 0 && s.enabled)
+  if (!stage) return undefined
+  // 阶段 0 概览：信任条目前两条预览（内联∪引用合并口径）
+  const groups = stage.groups.map((group): StageZeroGroup => {
+    const policy = props.policies.find((p) => p.id === group.key)
+    if (!policy) return { ...group, preview: '' }
+    const entries = mergeIpEntries(enrichedIpLists.value, parseIPList(policy.ip_whitelist), parseRefIds(policy.ip_whitelist_refs))
+    if (entries.length === 0) return { ...group, preview: '' }
+    const head = entries.slice(0, 2).join('、')
+    return { ...group, preview: entries.length > 2 ? `${head} 等` : head }
+  })
+  return { ...stage, groups }
+})
 const typedStagePanels = computed<StageGroup[]>(() => (displayModel.value?.stages ?? []).filter((s) => s.stage !== 0))
 const typedStageByKey = (key: string): StageGroup | undefined => typedStagePanels.value.find((s) => `stage${s.stage}` === key)
 
@@ -441,16 +458,6 @@ const stageZeroSubtitle = computed(() => {
   if (states.every((v) => !v)) return '直通上游'
   return '直通 + 保留检测'
 })
-
-// 阶段 0 概览：信任条目前两条预览（内联∪引用合并口径）
-const trustPreview = (policyId: number): string => {
-  const policy = props.policies.find((p) => p.id === policyId)
-  if (!policy) return ''
-  const entries = mergeIpEntries(enrichedIpLists.value, parseIPList(policy.ip_whitelist), parseRefIds(policy.ip_whitelist_refs))
-  if (entries.length === 0) return ''
-  const preview = entries.slice(0, 2).join('、')
-  return entries.length > 2 ? `${preview} 等` : preview
-}
 
 const policyTypeOf = (policyId: number) =>
   inferPolicyType(props.policies.find((p) => p.id === policyId) ?? { has_ip_control: false, has_rate_limit: false, has_custom_rules: false })
@@ -780,7 +787,6 @@ const onDialogOpen = (): void => {
 .tl-chip--timing {
   background: color-mix(in srgb, var(--el-color-success) 10%, transparent);
   color: var(--el-color-success);
-  border-color: color-mix(in srgb, var(--el-color-success) 30%, transparent);
   font-variant-numeric: tabular-nums;
 }
 .tl-sub { font-size: 12px; color: #6b7280; }

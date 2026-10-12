@@ -17,16 +17,22 @@ var auditRoutePolicies = map[string]AuditPolicy{
 	// 审计裁定——纯会话门下旧码全作废+明文下发登录可用凭证，须留痕）；setup/
 	// status/verify-step 为读或内部动作不产生审计（Generic 中间件映射为空 →
 	// 不记录——R66 D-N3 后的收敛形态）；admin reset handler 记录「重置/用户认证」。
-	"POST /api/v1/auth/mfa/verify":                AuditPolicyExplicit,
-	"POST /api/v1/auth/mfa/setup":                 AuditPolicySkip,
-	"GET /api/v1/auth/mfa/status":                 AuditPolicySkip,
-	"POST /api/v1/auth/mfa/activate":              AuditPolicyExplicit,
-	"POST /api/v1/auth/mfa/disable":               AuditPolicyExplicit,
-	"POST /api/v1/auth/mfa/recovery-codes":        AuditPolicyExplicit,
-	"POST /api/v1/auth/mfa/verify-step":           AuditPolicySkip,
-	"POST /api/v1/users/:id/mfa/reset":            AuditPolicyExplicit,
-	"POST /api/v1/auth/logout":                    AuditPolicyExplicit,
-	"POST /api/v1/auth/setup":                     AuditPolicyExplicit,
+	"POST /api/v1/auth/mfa/verify":         AuditPolicyExplicit,
+	"POST /api/v1/auth/mfa/setup":          AuditPolicySkip,
+	"GET /api/v1/auth/mfa/status":          AuditPolicySkip,
+	"POST /api/v1/auth/mfa/activate":       AuditPolicyExplicit,
+	"POST /api/v1/auth/mfa/disable":        AuditPolicyExplicit,
+	"POST /api/v1/auth/mfa/recovery-codes": AuditPolicyExplicit,
+	"POST /api/v1/auth/mfa/verify-step":    AuditPolicySkip,
+	"POST /api/v1/users/:id/mfa/reset":     AuditPolicyExplicit,
+	"POST /api/v1/auth/logout":             AuditPolicyExplicit,
+	"POST /api/v1/auth/setup":              AuditPolicyExplicit,
+	// R72 CORE-F2：/mcp 条目运行时冗余——auditMiddleware 为根级中间件（先于
+	// v1 组注册）会对 /mcp 分类，但缺省返回同为 AuditPolicySkip；保留本条目作
+	// 「有意跳过」显式登记——契约测试 TestSetupRouter_writeRoutesHaveExplicit-
+	// AuditClassification 要求每条写路由显式分类（intentionalSkip 断言
+	// IsAuditedWriteRoute 命中本表），删除将落入「默认分类」漂移告警。MCP 写
+	// 操作审计由内部转发重入的 REST 层各自显式记录承担。
 	"POST /api/v1/mcp":                            AuditPolicySkip,
 	"POST /api/v1/users":                          AuditPolicyExplicit,
 	"PUT /api/v1/users/:id":                       AuditPolicyExplicit,

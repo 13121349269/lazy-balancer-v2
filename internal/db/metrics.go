@@ -31,6 +31,11 @@ func nextQuarantinePath(path string) string {
 		}
 		if _, err := os.Stat(candidate); errors.Is(err, os.ErrNotExist) {
 			return candidate
+		} else if err != nil {
+			// 持久 Stat 错误（父路径 ENOTDIR/EACCES 等）——记日志返回现值，
+			// 不得无界自旋（R72 CORE-F1）。后续 Rename 失败由调用方处理。
+			log.Printf("nextQuarantinePath: stat %s: %v（返回现值候选路径）", candidate, err)
+			return candidate
 		}
 	}
 }

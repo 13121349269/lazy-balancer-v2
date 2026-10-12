@@ -2,11 +2,12 @@ package services
 
 import "testing"
 
-// 重试窗口（方案 C，2026-10-12 用户裁定）：HTTP 与 TCP 的 tcp_try_duration 值语义
-// 通用——td>0 按值发射窗口/间隔（间隔缺省 250ms）；td==0 兜底 5s/250ms（存量
-// HTTP 行恒 0，零行为变化）；td==-1 显式禁用重试（发射 retries=0，不发射
-// try_duration/try_interval）。NTLM 接管态由 UI 修改器把 td 落 -1，渲染对
-// ntlm_compatible 零感知。
+// 重试窗口（方案 C，2026-10-12 用户裁定）：HTTP 与 TCP 的 tcp_try_duration 值域
+// 通用（[-1,60000]），但 td==0/-1 渲染语义按协议分叉——td>0 按值发射窗口/间隔
+// （间隔缺省 250ms）；HTTP 侧 td==0 兜底 5s/250ms（存量 HTTP 行恒 0，零行为变化）、
+// td==-1 显式禁用重试（发射 retries=0，不发射 try_duration/try_interval）；TCP 侧
+// td==0/-1 均零窗口不发射（l4 proxy 无 retries 字段）。NTLM 接管态由 UI 修改器
+// 把 td 落 -1，渲染对 ntlm_compatible 零感知。
 
 func httpRoutesWithTryDuration(t *testing.T, td, ti int) map[string]interface{} {
 	t.Helper()

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -262,5 +263,35 @@ func TestGCQuarantinedMetricsFiles_keepsNewestThreePerBase(t *testing.T) {
 	}
 	if _, err := os.Stat(unrelated); err != nil {
 		t.Fatalf("unrelated base names must not be touched: %v", err)
+	}
+}
+
+// R72 CORE-F1：Stat 返回非 ErrNotExist 持久错误（父路径是普通文件 → ENOTDIR）
+// 时，nextQuarantinePath 必须记日志并返回现值，不得无界自旋。
+func TestNextQuarantinePath_returnsCandidateOnPersistentStatError(t *testing.T) {
+	dir := t.TempDir()
+	blocker := filepath.Join(dir, "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0600); err != nil {
+		t.Fatalf("write blocker: %v", err)
+	}
+	target := filepath.Join(blocker, "sub", "app.db")
+
+	var logBuf bytes.Buffer
+	oldOut := log.Writer()
+	log.SetOutput(&logBuf)
+	defer log.SetOutput(oldOut)
+
+	done := make(chan string, 1)
+	go func() { done <- nextQuarantinePath(target) }()
+	select {
+	case got := <-done:
+		if !strings.HasPrefix(got, target+".corrupt.") {
+			t.Fatalf("returned %q, want prefix %q", got, target+".corrupt.")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("nextQuarantinePath spun on persistent stat error (unbounded loop)")
+	}
+	if !strings.Contains(logBuf.String(), "nextQuarantinePath") {
+		t.Fatalf("persistent stat error not logged, log=%q", logBuf.String())
 	}
 }

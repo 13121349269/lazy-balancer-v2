@@ -21,6 +21,7 @@ require (
 	github.com/corazawaf/coraza/v3 v3.8.1
 	github.com/glebarez/go-sqlite v1.23.0
 	github.com/pquerna/otp v1.5.0
+	lazy-balancer-v2/geoipnames v0.0.0-00010101000000-000000000000
 	lazy-balancer-v2/wafiplist v0.0.0-00010101000000-000000000000
 )
 
@@ -89,3 +90,5 @@ require (
 )
 
 replace lazy-balancer-v2/wafiplist => ./wafiplist
+
+replace lazy-balancer-v2/geoipnames => ./geoipnames

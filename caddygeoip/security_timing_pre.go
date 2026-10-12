@@ -38,7 +38,22 @@ func (h *SecurityTimingPre) ServeHTTP(w http.ResponseWriter, r *http.Request, ne
 	return next.ServeHTTP(w, r)
 }
 
+// Provision/Cleanup 启停耗时侧车写管线（PLUG-N1 第 72 轮，引用计数——
+// blocked_counter/timing_pre/timing_end 三写点共享一份，重载期不断）。
+func (h *SecurityTimingPre) Provision(ctx caddy.Context) error {
+	securityTimingWriterAcquire()
+	return nil
+}
+
+// Cleanup 释放本 handler 的写管线引用。
+func (h *SecurityTimingPre) Cleanup() error {
+	securityTimingWriterRelease()
+	return nil
+}
+
 // Interface guards(编译期契约,零运行时成本)。
 var (
+	_ caddy.Provisioner           = (*SecurityTimingPre)(nil)
+	_ caddy.CleanerUpper          = (*SecurityTimingPre)(nil)
 	_ caddyhttp.MiddlewareHandler = (*SecurityTimingPre)(nil)
 )

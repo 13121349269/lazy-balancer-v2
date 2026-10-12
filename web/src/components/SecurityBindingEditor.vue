@@ -154,6 +154,7 @@ import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Lock, Search, WarningFilled } from '@element-plus/icons-vue'
 import { request, mfaAwareSuccess } from '@/utils/api'
+import DialogHeader from '@/components/DialogHeader.vue'
 import type { APIResponse } from '@/types'
 import {
   POLICY_TYPE_SHORT_LABELS,
@@ -307,12 +308,16 @@ const toggleSelectAll = (checked: string | number | boolean): void => {
   pickerSelected.value = pickerSelected.value.filter((id) => !selectableIdSet.has(id))
 }
 
+// 策略 id → 类型映射：策略集变化时重建一次（原实现每行每类型调用都全量构建 Map）
+const policyTypeById = computed<ReadonlyMap<number, SecurityPolicyType>>(() => {
+  const map = new Map<number, SecurityPolicyType>()
+  for (const policy of props.policies) map.set(policy.id, inferPolicyType(policy))
+  return map
+})
+
 // 规则行内当前绑定集合（按策略类型分区）
-const boundPoliciesByType = (rule: BindingEditorRule, type: SecurityPolicyType): SecurityStageBinding[] => {
-  const policyTypeById = new Map<number, SecurityPolicyType>()
-  for (const policy of props.policies) policyTypeById.set(policy.id, inferPolicyType(policy))
-  return (props.bindings[rule.caddy_id] || []).filter((binding) => policyTypeById.get(binding.policy_id) === type)
-}
+const boundPoliciesByType = (rule: BindingEditorRule, type: SecurityPolicyType): SecurityStageBinding[] =>
+  (props.bindings[rule.caddy_id] || []).filter((binding) => policyTypeById.value.get(binding.policy_id) === type)
 
 // 阶段页覆盖徽标（页已删/内容空 = broken）
 const overrideBadge = (rule: BindingEditorRule, stage: 1 | 3): { text: string; title: string; broken: boolean } | null => {

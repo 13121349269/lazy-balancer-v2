@@ -112,7 +112,10 @@ export function useLibUpdateDialog<TInfo>(options: UseLibUpdateDialogOptions<TIn
       await request.post<APIResponse<{ status: string; trigger: string }>>(`${options.apiPrefix}/update`, undefined, { silent: true })
     } catch (error) {
       if (!(error instanceof ApiRequestError && error.status === 409)) {
+        // 非 409 失败=触发未生效，报错后终止（原实现继续走 refreshStatus+startPolling，
+        // 会把无关的既有任务进度当成本次触发结果轮询）；409 维持「已有任务在跑，直接轮询」
         ElMessage.error(error instanceof Error ? error.message : '触发更新失败')
+        return
       }
     } finally {
       starting.value = false

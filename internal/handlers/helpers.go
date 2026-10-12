@@ -887,9 +887,9 @@ func (metrics *ruleMetricsAggregate) observeHTTP(name string, value float64) {
 		}
 	case strings.HasPrefix(name, "caddy_http_requests_in_flight{"):
 		metrics.requestsInFlight += int64(value)
-	case strings.Contains(name, "caddy_http_request_size_bytes_sum"):
+	case strings.HasPrefix(name, "caddy_http_request_size_bytes_sum"):
 		metrics.bytesIn += int64(value)
-	case strings.Contains(name, "caddy_http_response_size_bytes_sum"):
+	case strings.HasPrefix(name, "caddy_http_response_size_bytes_sum"):
 		metrics.bytesOut += int64(value)
 	}
 }
@@ -1172,17 +1172,8 @@ func classifyStatusCode(code string) string {
 }
 
 func emptyRuleMetrics() gin.H {
-	return gin.H{
-		"requests_total":     int64(0),
-		"requests_in_flight": int64(0),
-		"status_2xx":         int64(0),
-		"status_3xx":         int64(0),
-		"status_4xx":         int64(0),
-		"status_5xx":         int64(0),
-		"bytes_in":           int64(0),
-		"bytes_out":          int64(0),
-		"healthy":            false,
-	}
+	// 双源收敛：空值形状与 ruleMetricsAggregate 零值输出同源，禁手工维护两套键表。
+	return ruleMetricsAggregate{}.ruleMetrics(true)
 }
 
 func isValidHost(host string) bool {

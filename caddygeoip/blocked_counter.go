@@ -79,11 +79,19 @@ func (SecurityBlockedCounter) CaddyModule() caddy.ModuleInfo {
 
 // Provision 注册计数器到 Caddy 的 metrics registry(非默认 registry——
 // 默认 registry 的指标不暴露在 Caddy /metrics 端点);registerOrExisting
-// 保证 reload 幂等(重复注册复用实例,不 panic)。
+// 保证 reload 幂等(重复注册复用实例,不 panic)。同时启动耗时侧车写管线
+// 引用（PLUG-N1 第 72 轮——本 handler 是拦截点耗时写点之一）。
 func (h *SecurityBlockedCounter) Provision(ctx caddy.Context) error {
 	if reg := ctx.GetMetricsRegistry(); reg != nil {
 		h.metrics = newSecurityBlockedCounterVec(reg)
 	}
+	securityTimingWriterAcquire()
+	return nil
+}
+
+// Cleanup 释放本 handler 的耗时侧车写管线引用（PLUG-N1 第 72 轮）。
+func (h *SecurityBlockedCounter) Cleanup() error {
+	securityTimingWriterRelease()
 	return nil
 }
 
@@ -143,5 +151,6 @@ func (h *SecurityBlockedCounter) ServeHTTP(w http.ResponseWriter, r *http.Reques
 // Interface guards(编译期契约,零运行时成本)。
 var (
 	_ caddy.Provisioner           = (*SecurityBlockedCounter)(nil)
+	_ caddy.CleanerUpper          = (*SecurityBlockedCounter)(nil)
 	_ caddyhttp.MiddlewareHandler = (*SecurityBlockedCounter)(nil)
 )

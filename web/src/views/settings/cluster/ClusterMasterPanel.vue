@@ -18,9 +18,7 @@
           @change="(v: string | number | boolean) => handleSwitchChange(item.key, v)"
         />
         <span class="form-tip-inline" :title="item.tip">{{ item.tip }}</span>
-        <el-tooltip :content="syncSwitchFreezeHint" placement="top">
-          <el-icon class="switch-freeze-hint"><QuestionFilled /></el-icon>
-        </el-tooltip>
+        <FieldHelpIcon :content="syncSwitchFreezeHint" />
       </el-form-item>
     </el-form>
   </el-card>
@@ -144,7 +142,8 @@ import { computed } from 'vue'
 import { useWindowSize } from '@vueuse/core'
 import { formatDate } from '@/utils/date'
 import { popperViewportSafe } from '@/utils/popper'
-import { List, QuestionFilled, Setting } from '@element-plus/icons-vue'
+import { List, Setting } from '@element-plus/icons-vue'
+import FieldHelpIcon from '@/components/common/FieldHelpIcon.vue'
 import type { ClusterHealth, ClusterNode, ClusterNodeStatus, ClusterNodeWithSyncError, ClusterStatus } from '@/types'
 
 const props = defineProps<{
@@ -260,7 +259,6 @@ const versionIncompatibilityError = (node: ClusterNodeWithSyncError): string => 
 .settings-form :deep(.el-form-item__label) { white-space: nowrap; }
 .settings-form :deep(.el-form-item__content) { flex-wrap: nowrap; }
 .settings-form .form-tip-inline { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
-.switch-freeze-hint { color: #9ca3af; font-size: 14px; flex-shrink: 0; cursor: help; }
 .card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: var(--text-primary); }
 .mono-value { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
 .access-url-link { display: inline-flex; max-width: 100%; vertical-align: middle; }

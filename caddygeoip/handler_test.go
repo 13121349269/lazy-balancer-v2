@@ -508,3 +508,81 @@ func TestNormalizeCity_autonomousPrefecture(t *testing.T) {
 		}
 	}
 }
+
+// TestSharedGeoIPSearcher_statFailureEvictsCachedEntry（PLUG-N2，第 72 轮）：
+// stat 失败（xdb 更新 rename 窗口/文件被删）且缓存持有该路径条目时，条目
+// 必须驱逐——旧实例走既有 AfterFunc 延迟关闭（在途查询保护与换库路径一致）。
+// 不驱逐时旧 inode 实例永久占据缓存槽：stat 失败路径原样 return err 不碰
+// 缓存，文件以「同 modtime+size」形态恢复（rsync -a/touch -r 保时间戳重铺）
+// 时缓存命中判定通过，被删 inode 的旧库被无限期当有效数据服务（更新静默
+// 失效——恰是 M2 缓存条目要防的形态）。
+func TestSharedGeoIPSearcher_statFailureEvictsCachedEntry(t *testing.T) {
+	src := findTestXdb()
+	if src == "" {
+		t.Skip("no ip2region xdb available; place one under caddygeoip/testdata/ to run this test")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ip2region.xdb")
+	data, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatalf("read source xdb: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("seed xdb copy: %v", err)
+	}
+	oldDelay := geoipOldInstanceCloseDelay
+	geoipOldInstanceCloseDelay = 200 * time.Millisecond
+	t.Cleanup(func() { geoipOldInstanceCloseDelay = oldDelay })
+
+	// Given 缓存已持有该路径条目
+	first, err := sharedGeoIPSearcher(path)
+	if err != nil {
+		t.Fatalf("seed cache: %v", err)
+	}
+
+	// When 文件被移除（stat 失败）后再次解析
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sharedGeoIPSearcher(path); err == nil {
+		t.Fatal("stat failure must surface as error (provision degrades pass-through)")
+	}
+
+	// Then 缓存条目已被驱逐（不 panic、不持旧 inode 占位）
+	geoipSharedMu.Lock()
+	_, stillCached := geoipSharedSearchers[path]
+	geoipSharedMu.Unlock()
+	if stillCached {
+		t.Fatal("stat failure with cached entry must evict it (delayed close), not retain the stale-inode entry")
+	}
+
+	// And 旧实例在延迟窗口内仍可查（AfterFunc 在途保护），窗口过后被关闭
+	if _, err := first.Search("114.114.114.114"); err != nil {
+		t.Fatalf("延迟窗口内旧实例不得在役查询失败: %v", err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if _, err := first.Search("114.114.114.114"); err != nil {
+			break // pool closed
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("被驱逐旧实例在延迟窗口后仍未被 Close")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// And 文件恢复后重建全新实例（不复用被驱逐的旧实例）
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("restore xdb: %v", err)
+	}
+	second, err := sharedGeoIPSearcher(path)
+	if err != nil {
+		t.Fatalf("rebuild after restore: %v", err)
+	}
+	if second == first {
+		t.Fatal("evicted entry must not be re-served; expect a freshly built instance")
+	}
+	if region, err := second.Search("114.114.114.114"); err != nil || region == "" {
+		t.Fatalf("rebuilt instance must serve lookups: region=%q err=%v", region, err)
+	}
+}
