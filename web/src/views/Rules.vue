@@ -775,12 +775,18 @@
               </el-form-item>
             </template>
 
-            <template v-if="wizardForm.protocol === 'tcp'">
+            <template v-if="wizardForm.protocol === 'http' || wizardForm.protocol === 'tcp'">
               <el-divider content-position="left" class="compact-divider">连接重试</el-divider>
 
-              <el-form-item label="重试窗口">
-                <el-input-number v-model="wizardForm.tcp_try_duration" :min="0" :max="60000" controls-position="right" style="width: 120px;" />
-                <span class="form-tip-inline">毫秒，0 表示不重试；连接失败后在窗口期内尝试其他上游</span>
+              <el-form-item>
+                <template #label>重试窗口
+                </template>
+                <el-input-number v-model="wizardForm.tcp_try_duration" :min="ntlmOn ? -1 : 0" :max="60000" controls-position="right" style="width: 120px;" :disabled="ntlmOn" />
+                <span class="form-tip-inline"><TakeoverBadge v-if="ntlmOn" />{{ ntlmOn
+                  ? '禁用重试（NTLM 模式锁定）'
+                  : (wizardForm.protocol === 'tcp'
+                      ? '毫秒，0 表示不重试；连接失败后在窗口期内尝试其他上游'
+                      : '毫秒，0 = 默认 5 秒窗口；失败后在窗口期内尝试其他上游') }}</span>
               </el-form-item>
 
               <el-form-item label="重试间隔">
@@ -965,11 +971,12 @@
           <el-descriptions-item label="被动健康检查" v-if="ruleConfig.protocol === 'http' || ruleConfig.protocol === 'tcp'">
             失败 {{ ruleConfig.health_check_unhealthy_threshold || 3 }} 次视为不健康, 间隔 {{ ruleConfig.health_check_interval || 10 }}s, 超时 {{ ruleConfig.health_check_timeout || 2 }}s
           </el-descriptions-item>
-          <el-descriptions-item label="连接重试" v-if="ruleConfig.protocol === 'tcp'">
+          <el-descriptions-item label="连接重试" v-if="ruleConfig.protocol === 'http' || ruleConfig.protocol === 'tcp'">
             <template v-if="ruleConfig.tcp_try_duration > 0">
               窗口 {{ ruleConfig.tcp_try_duration }}ms / 间隔 {{ ruleConfig.tcp_try_interval }}ms
             </template>
-            <template v-else>禁用</template>
+            <template v-else-if="ruleConfig.tcp_try_duration === -1">禁用重试（NTLM 模式）</template>
+            <template v-else>{{ ruleConfig.protocol === 'tcp' ? '禁用' : '默认 5s 窗口' }}</template>
           </el-descriptions-item>
           <el-descriptions-item label="请求体大小">{{ (ruleConfig.request_body_max_size_mb || 0) > 0 ? ruleConfig.request_body_max_size_mb + 'MB' : '全局默认' }}</el-descriptions-item>
             <el-descriptions-item label="Keepalive 超时">{{ (ruleConfig.upstream_keepalive_timeout || 0) > 0 ? ruleConfig.upstream_keepalive_timeout + 's' : '全局默认' }}</el-descriptions-item>
