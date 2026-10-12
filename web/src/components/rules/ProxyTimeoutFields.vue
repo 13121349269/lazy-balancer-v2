@@ -12,7 +12,7 @@
         @update:model-value="update(field.key, $event)"
       />
       <span v-if="fieldOverrides?.[field.key]" class="form-tip-inline">
-        <span v-if="fieldOverrides[field.key]!.badge" class="field-override-badge">{{ fieldOverrides[field.key]!.badge }}</span>
+        <TakeoverBadge v-if="fieldOverrides[field.key]!.badge" :label="fieldOverrides[field.key]!.badge" />
         {{ fieldOverrides[field.key]!.note }}
       </span>
       <span v-else class="form-tip-inline">
@@ -23,6 +23,7 @@
 </template>
 
 <script setup lang="ts">
+import TakeoverBadge from '@/components/common/TakeoverBadge.vue'
 import type { ProxyTimeoutConfig } from '@/types'
 
 withDefaults(defineProps<{
@@ -68,16 +69,4 @@ const update = (field: keyof ProxyTimeoutConfig, value: number | undefined): voi
 
 <style scoped>
 .number-input { width: 120px; }
-.field-override-badge {
-  display: inline-block;
-  margin-right: 6px;
-  padding: 0 6px;
-  border: 1px solid var(--el-border-color);
-  border-radius: 4px;
-  background: var(--el-fill-color-light);
-  color: var(--el-text-color-secondary);
-  font-size: 11px;
-  line-height: 18px;
-  vertical-align: middle;
-}
 </style>

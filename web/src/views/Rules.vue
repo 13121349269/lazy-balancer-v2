@@ -518,9 +518,7 @@
               <el-table-column min-width="180" v-if="wizardForm.protocol === 'http'">
                 <template #header>
                   回源域名
-                  <el-tooltip placement="top" content="该上游独立的回源 Host 头与 HTTPS SNI（主机名，不带端口；端口沿用左侧端口列配置）。留空=不覆盖（Host 跟随客户端请求或上游地址）">
-                    <el-icon class="upstream-unknown"><QuestionFilled /></el-icon>
-                  </el-tooltip>
+                  <FieldHelpIcon content="该上游独立的回源 Host 头与 HTTPS SNI（主机名，不带端口；端口沿用左侧端口列配置）。留空=不覆盖（Host 跟随客户端请求或上游地址）" />
                 </template>
                 <template #default="{ row }">
                   <el-tooltip placement="top" :disabled="!wizardForm.dynamic_dns" content="动态上游模式不支持回源域名（改写 Host 请经 API/MCP 设置规则级 host_header）">
@@ -537,9 +535,7 @@
               <el-table-column width="84">
                 <template #header>
                   权重 %
-                  <el-tooltip placement="top" content="数字越大，分配到的请求越多；权重相同时即为普通轮询。至少需要添加一个上游服务器。">
-                    <el-icon class="upstream-unknown"><QuestionFilled /></el-icon>
-                  </el-tooltip>
+                  <FieldHelpIcon content="数字越大，分配到的请求越多；权重相同时即为普通轮询。至少需要添加一个上游服务器。" />
                 </template>
                 <template #default="{ row, $index }">
                   <el-input-number v-model="row.weight" :min="1" :max="100" size="small" controls-position="right" class="upstream-input-small" :disabled="!row.enabled" @change="onWeightChange($index)" />
@@ -548,11 +544,9 @@
               <el-table-column width="118">
                 <template #header>
                   {{ wizardForm.protocol === 'tcp' ? '最大连接' : '最大请求数' }}
-                  <el-tooltip placement="top" :content="wizardForm.protocol === 'tcp'
+                  <FieldHelpIcon :content="wizardForm.protocol === 'tcp'
                     ? '该上游并发连接数上限（HTTP 规则映射为 reverse_proxy 每上游并发请求数 max_requests；TCP 规则映射为 caddy-l4 max_connections），0 为不限制'
-                    : '该上游同时处理的请求数达到上限后判定不可用并移出负载，0 为不限制——HTTP 反代无逐上游并发连接限制'" >
-                    <el-icon class="upstream-unknown"><QuestionFilled /></el-icon>
-                  </el-tooltip>
+                    : '该上游同时处理的请求数达到上限后判定不可用并移出负载，0 为不限制——HTTP 反代无逐上游并发连接限制'" />
                 </template>
                 <template #default="{ row }">
                   <el-tooltip placement="top" :disabled="!wizardForm.dynamic_dns" :content="`动态上游模式下${wizardForm.protocol === 'tcp' ? '最大连接' : '最大请求数'}不生效`">
@@ -617,15 +611,14 @@
 
               <el-form-item label="NTLM 兼容">
                 <template #label>NTLM 兼容
-                  <el-tooltip placement="top" popper-class="ntlm-help-popper">
+                  <FieldHelpIcon popper-class="ntlm-help-popper">
                     <template #content>
                       <div class="ntlm-help-line">适用场景：Exchange / AD / 旧版 IIS 等使用 NTLM / 协商认证的后端</div>
                       <div class="ntlm-help-line">已知限制：</div>
                       <div class="ntlm-help-line">· 若后端协商到 Kerberos，建议不改写 Host</div>
                       <div class="ntlm-help-line">· 入口 HTTP/2 由客户端自动降级，不受本开关控制</div>
                     </template>
-                    <el-icon class="upstream-unknown"><QuestionFilled /></el-icon>
-                  </el-tooltip>
+                  </FieldHelpIcon>
                 </template>
                 <div class="ntlm-switch-control">
                   <el-switch :model-value="ntlmOn" @change="onNtlmToggle" />
@@ -660,8 +653,7 @@
               <el-form-item label="主动检查">
                 <div class="active-check-control">
                   <el-switch v-model="wizardForm.enable_active_health_check" :disabled="ntlmOn" />
-                  <span v-if="ntlmOn" class="ntlm-takeover-badge">NTLM 接管</span>
-                  <span class="form-tip-inline">{{ ntlmOn
+                  <span v-if="ntlmOn" class="form-tip-inline" style="margin-left: 8px;"><TakeoverBadge />{{ ntlmOn
                     ? '已关闭：NTLM 后端探测返回 401 会被误判摘除；被动健康检查仍在役'
                     : (wizardForm.enable_active_health_check ? '周期探测，异常节点持续摘除直至恢复（推荐）' : '仅被动熔断，异常节点会周期恢复并重新接收流量') }}</span>
                 </div>
@@ -785,8 +777,7 @@
               <el-form-item label="强制 HTTP/1.1">
                 <div class="active-check-control">
                   <el-switch v-model="wizardForm.upstream_force_http1" :active-value="1" :inactive-value="0" :disabled="ntlmOn" />
-                  <span v-if="ntlmOn" class="ntlm-takeover-badge">NTLM 接管</span>
-                  <span class="form-tip-inline">后端不支持 HTTP/2 或使用 NTLM 认证时开启；仅对 https 上游生效</span>
+                  <span v-if="ntlmOn" class="form-tip-inline" style="margin-left: 8px;"><TakeoverBadge />后端不支持 HTTP/2 或使用 NTLM 认证时开启；仅对 https 上游生效</span>
                 </div>
               </el-form-item>
             </template>
@@ -817,13 +808,9 @@
               <span class="form-tip-inline">MB，0 = 全局默认；限制单个请求体的最大大小</span>
             </el-form-item>
 
-            <el-form-item>
-              <template #label>
-                <span>Keepalive 超时</span>
-                <span v-if="ntlmOn" class="ntlm-takeover-badge ntlm-takeover-badge-label">NTLM 接管</span>
-              </template>
+            <el-form-item label="Keepalive 超时">
               <el-input-number v-model="wizardForm.upstream_keepalive_timeout" :min="0" :max="3600" controls-position="right" style="width: 120px;" :disabled="ntlmOn" />
-              <span class="form-tip-inline">秒，0 = 全局默认；与上游服务器长连接的空闲超时</span>
+              <span class="form-tip-inline"><TakeoverBadge v-if="ntlmOn" />{{ ntlmOn ? 'NTLM 模式锁定 300s（关闭后恢复全局继承）' : '秒，0 = 全局默认；与上游服务器长连接的空闲超时' }}</span>
             </el-form-item>
           </el-form>
         </div>
@@ -1171,8 +1158,10 @@
 import { ref, reactive, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { request, mfaAwareSuccess } from '@/utils/api'
-import { Plus, Operation, Delete, InfoFilled, Lock, Connection, Guide, Check, ArrowLeft, ArrowRight, Document, CircleCheckFilled, CircleCloseFilled, QuestionFilled, Setting, RefreshRight, Search, WarningFilled, Location, Monitor, Link, Tickets } from '@element-plus/icons-vue'
+import { Plus, Operation, Delete, InfoFilled, Lock, Connection, Guide, Check, ArrowLeft, ArrowRight, Document, CircleCheckFilled, CircleCloseFilled, Setting, RefreshRight, Search, WarningFilled, Location, Monitor, Link, Tickets } from '@element-plus/icons-vue'
 import DialogHeader from '@/components/DialogHeader.vue'
+import FieldHelpIcon from '@/components/common/FieldHelpIcon.vue'
+import TakeoverBadge from '@/components/common/TakeoverBadge.vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import axios from 'axios'
 import { ansiToHtml } from '@/utils/ansi'
@@ -3872,10 +3861,6 @@ onUnmounted(() => {
   font-size: 14px;
 }
 
-.upstream-unknown {
-  color: #9ca3af;
-  font-size: 14px;
-}
 
 /* Status switch */
 .status-switch :deep(.el-switch__core) {
@@ -4062,23 +4047,7 @@ onUnmounted(() => {
   font-size: 15px;
 }
 
-.ntlm-takeover-badge {
-  display: inline-block;
-  padding: 0 6px;
-  border: 1px solid var(--el-border-color);
-  border-radius: 4px;
-  background: var(--el-fill-color-light);
-  color: var(--el-text-color-secondary);
-  font-size: 11px;
-  line-height: 18px;
-  white-space: nowrap;
-}
 
-/* label 侧接管徽标（Keepalive）：跟随标题行，不挤入 tip 文本流 */
-.ntlm-takeover-badge-label {
-  margin-left: 6px;
-  vertical-align: 1px;
-}
 
 .active-check-control {
   display: flex;
