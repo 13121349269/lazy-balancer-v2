@@ -791,7 +791,7 @@
 
               <el-form-item label="重试间隔">
                 <el-input-number v-model="wizardForm.tcp_try_interval" :min="0" :max="10000" controls-position="right" style="width: 120px;" :disabled="ntlmOn || (wizardForm.tcp_try_duration || 0) <= 0" />
-                <span class="form-tip-inline">{{ ntlmOn ? '重试已禁用，间隔不生效' : ((wizardForm.tcp_try_duration || 0) <= 0 ? '窗口未启用时间隔不生效' : '毫秒，每次重试间隔；0 表示使用 Caddy 默认间隔') }}</span>
+                <span class="form-tip-inline"><TakeoverBadge v-if="ntlmOn" />{{ ntlmOn ? '重试已禁用，间隔不生效' : ((wizardForm.tcp_try_duration || 0) <= 0 ? '窗口未启用时间隔不生效' : '毫秒，每次重试间隔；0 表示使用 Caddy 默认间隔') }}</span>
               </el-form-item>
 
               <el-form-item v-if="wizardForm.protocol === 'tcp'" label="PROXY V2">
@@ -4052,7 +4052,7 @@ onUnmounted(() => {
 .active-check-control {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
 }
 
 .wizard-footer {
