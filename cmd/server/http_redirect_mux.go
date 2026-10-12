@@ -73,6 +73,10 @@ func (m *httpRedirectMux) dispatch() {
 	for {
 		connection, err := m.Listener.Accept()
 		if err != nil {
+			// INFRA-2（第 73 轮登记）：net.Error.Temporary() 自 Go 1.18 起弃用，
+			// 但本判据行为已由 http_redirect_mux_test.go 钉死（Temporary()=true 且
+			// Timeout()=false 类 accept 瞬时失败的退避实证）——保留弃用 API 换取
+			// 行为稳定，不经判据改写发散；未来 accept 语义有明确替代再迁移。
 			if netErr, ok := err.(net.Error); ok && (netErr.Timeout() || netErr.Temporary()) {
 				if retryDelay == 0 {
 					retryDelay = 5 * time.Millisecond

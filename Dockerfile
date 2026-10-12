@@ -94,6 +94,10 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 # Final image
 FROM alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
+# FE-8/INFRA-4（第 73 轮登记）：版本号三处硬编码之一（另两处
+# web/src/utils/branding.ts appVersion 回退值、docker-compose.yml args.VERSION）。
+# 发版检查单已固化进 lazy-balancer-release 技能步骤 2（三处同步 bump）——保留
+# 硬编码不回退，仅登记防漏。
 ARG VERSION=v2.3.6
 # 构建机网络受限时经 --build-arg HTTP(S)_PROXY 透传给 RUN 下载步骤
 # （CRS/ip2region 钉版下载）；未传参时为空值，行为不变（官方惯例形态）。

@@ -23,11 +23,10 @@ func TestUpdateSecurityPolicy_geoipModeFlipWithoutEntriesRejected(t *testing.T) 
 	router := newSecurityRouter(t)
 	withIP2RegionUnloaded(t)
 
-	id := createTestPolicy(t, router, map[string]any{
+	createTestPolicy(t, router, map[string]any{
 		"name": "flip-mode-only", "geoip_mode": "off", "geoip_countries": `["广东"]`,
 	})
 	rec := putJSON(t, router, "/security/policies/1", map[string]any{"geoip_mode": "deny"})
-	_ = id
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("mode-only flip with missing xdb must 400, got %d %s", rec.Code, rec.Body.String())
 	}

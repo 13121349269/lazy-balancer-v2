@@ -223,7 +223,7 @@ const laggingSectionCount = (node: ClusterNodeWithSyncError): number => node.sec
 
 
 const versionIncompatibilityError = (node: ClusterNodeWithSyncError): string => {
-	const error = node.health?.last_sync_error.trim() ?? ''
+	const error = (node.health?.last_sync_error ?? '').trim()
 	if (!error) return ''
 	const code = node.health?.sync_error_code
 	if (code) {

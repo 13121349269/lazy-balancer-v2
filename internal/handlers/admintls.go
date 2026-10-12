@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -96,14 +97,22 @@ func validateAdminTLSConfigValues(cfg services.AdminTLSConfig) error {
 		return errors.New("无效的证书来源：启用时必须选择证书来源（自签名或上传证书）")
 	}
 	if cfg.Mode == "upload" {
-		if _, err := tls.X509KeyPair([]byte(cfg.Cert), []byte(cfg.Key)); err != nil {
-			return errors.New("证书与私钥不匹配: " + err.Error())
-		}
-		if err := validateAdminTLSCertPeriod(cfg.Cert, time.Now()); err != nil {
+		if err := validateUploadCertificatePair(cfg.Cert, cfg.Key, time.Now()); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// validateUploadCertificatePair 校验上传证书对：证书私钥匹配 + 有效期（未生效/
+// 已过期）。validateAdminTLSConfigValues（启用态 upload）与 UpdateAdminTLS
+// （禁用态但本次上传新证书材料）共用同一实现（R73 LBH-F6 收敛：原两处各自内联
+// X509KeyPair+validateAdminTLSCertPeriod）。
+func validateUploadCertificatePair(certPEM, keyPEM string, now time.Time) error {
+	if _, err := tls.X509KeyPair([]byte(certPEM), []byte(keyPEM)); err != nil {
+		return errors.New("证书与私钥不匹配: " + err.Error())
+	}
+	return validateAdminTLSCertPeriod(certPEM, now)
 }
 
 // adminTLSInput 抹平管理面板 HTTPS 入参的两种形态：multipart 表单（面板 UI
@@ -129,7 +138,8 @@ func decodeAdminTLSInput(c *gin.Context) (*adminTLSInput, error) {
 	if !strings.Contains(c.GetHeader("Content-Type"), "multipart/form-data") {
 		body, err := io.ReadAll(c.Request.Body)
 		if err != nil {
-			return nil, errors.New("请求体读取失败: " + err.Error())
+			// %w 保留 *http.MaxBytesError 链——上层映射 413（R73 LBH-F9）
+			return nil, fmt.Errorf("请求体读取失败: %w", err)
 		}
 		if bytes.HasPrefix(bytes.TrimLeft(body, " \t\r\n"), []byte("{")) {
 			return parseAdminTLSJSONInput(body)
@@ -137,7 +147,7 @@ func decodeAdminTLSInput(c *gin.Context) (*adminTLSInput, error) {
 		c.Request.Body = io.NopCloser(bytes.NewReader(body))
 	}
 	if err := c.Request.ParseMultipartForm(2 << 20); err != nil {
-		return nil, errors.New("表单解析失败: " + err.Error())
+		return nil, fmt.Errorf("表单解析失败: %w", err)
 	}
 	return &adminTLSInput{
 		c:            c,
@@ -204,13 +214,26 @@ func (in *adminTLSInput) certificatePair() (string, string, error) {
 	return readAdminTLSFiles(in.c)
 }
 
+// respondAdminTLSBodyError 把入参解析错误映射为响应：*http.MaxBytesError
+// （2 MiB MaxBytesReader 上限）→ 413，其余 → 400。UpdateAdminTLS 与
+// InspectAdminTLSCert 共用（R73 LBH-F9：原超限 body 恒 400，与规则域 413 口径
+// 不一致）。
+func respondAdminTLSBodyError(c *gin.Context, err error) {
+	var maxBytesErr *http.MaxBytesError
+	if errors.As(err, &maxBytesErr) {
+		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: "请求体超过 2 MiB 上限"})
+		return
+	}
+	c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+}
+
 // InspectAdminTLSCert parses uploaded cert/key files without saving, so the
 // UI can show what will be installed before the user confirms.
 func (h *Handlers) InspectAdminTLSCert(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 2<<20)
 	input, err := decodeAdminTLSInput(c)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		respondAdminTLSBodyError(c, err)
 		return
 	}
 	certPEM, keyPEM, err := input.certificatePair()
@@ -276,7 +299,7 @@ func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 2<<20)
 	input, err := decodeAdminTLSInput(c)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		respondAdminTLSBodyError(c, err)
 		return
 	}
 
@@ -301,29 +324,26 @@ func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
 		uploadedCertificate = true
 	}
 
-	// mode 值域门与启用态无关（第 53 轮补充轮 P3-6，用户裁定）——此前仅在
-	// enabled 分支校验，禁用态可落库白名单外值（「只有合法形态可落库」破口）。
-	if mode != "" && mode != "selfsigned" && mode != "upload" {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的证书来源：当前仅支持自签名或上传证书"})
+	// 形态校验（mode 值域 + 启用态必选来源 + upload 配对/有效期）与 v2 备份
+	// 导入（config_backup.go）共用同一实现（R73 LBH-F6 收敛：原内联校验与
+	// validateAdminTLSConfigValues 双份——改一处漏一处即分叉）。
+	if err := validateAdminTLSConfigValues(services.AdminTLSConfig{Enabled: enabled, Mode: mode, Cert: cert, Key: key}); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
+	// 独有探针：启用态以真实落盘目录探测证书可用性（自签名生成/文件读写），
+	// 覆盖 validateAdminTLSConfigValues 不涉的 ResolveCertificate 路径。
 	if enabled {
-		if mode == "" {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的证书来源：启用时必须选择证书来源（自签名或上传证书）"})
-			return
-		}
 		probe := services.AdminTLSConfig{Enabled: true, Mode: mode, Cert: cert, Key: key}
 		if _, err := probe.ResolveCertificate(h.cfg.DataDir); err != nil {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "证书不可用: " + err.Error()})
 			return
 		}
 	}
-	if mode == "upload" && (enabled || uploadedCertificate) {
-		if _, err := tls.X509KeyPair([]byte(cert), []byte(key)); err != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "证书与私钥不匹配: " + err.Error()})
-			return
-		}
-		if err := validateAdminTLSCertPeriod(cert, time.Now()); err != nil {
+	// 独有：禁用态但本次上传了新证书材料——仍校验配对/有效期（不落启用门；
+	// 契约见 TestUpdateAdminTLSJSONBody_rejectsMismatchedPairWithoutSaving）。
+	if mode == "upload" && uploadedCertificate && !enabled {
+		if err := validateUploadCertificatePair(cert, key, time.Now()); err != nil {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 			return
 		}

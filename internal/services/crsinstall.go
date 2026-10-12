@@ -178,7 +178,7 @@ func (m *CRSUpdateManager) downloadAndInstall(parent context.Context, tag string
 	// TOFU 完整性基线在格式验证成功之后记录（R33 F6）：验证前的坏工件（如代理
 	// 返回的 200 垃圾）留下基线会让下次同 tag 好下载误报。M11（契约#4）：内容
 	// 与基线 mismatch 时阻断安装并保留旧基线——错误消息已含人工清基线指引
-	//（确认上游更新合法后删除 data/download_integrity.json 对应条目重试）；
+	//（确认上游更新合法后删除 data/.download-integrity.json 对应条目重试）；
 	// 此时 rules 尚未替换，直接返回即可。I/O 类记录失败维持仅记日志不阻断。
 	if ierr := recordDownloadIntegrity(crsTarballBaselineKey(tag), tarball, "CRS规则库"); ierr != nil {
 		if errors.Is(ierr, errDownloadIntegrityMismatch) {

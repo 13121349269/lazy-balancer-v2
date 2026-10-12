@@ -272,7 +272,14 @@ func migrateLegacyAuditLogs(mainDB *sql.DB, auditPath string) error {
 	if _, err := conn.ExecContext(ctx, "ATTACH DATABASE ? AS audit_migration", auditPath); err != nil {
 		return fmt.Errorf("failed to attach audit database: %w", err)
 	}
-	defer conn.ExecContext(ctx, "DETACH DATABASE audit_migration")
+	defer func() {
+		// CORE-F4（第 73 轮）：DETACH 失败曾静默忽略——连接归还池仍挂
+		// audit_migration schema，本次迁移虽已提交（A-2 核实当前不可达），
+		// 但失败须留痕便于排查连接池污染。
+		if _, err := conn.ExecContext(ctx, "DETACH DATABASE audit_migration"); err != nil {
+			log.Printf("migrateLegacyAuditLogs: DETACH audit_migration 失败（连接归还池仍挂 schema）: %v", err)
+		}
+	}()
 
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {

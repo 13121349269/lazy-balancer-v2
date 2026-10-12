@@ -235,3 +235,34 @@ func TestUpdateAdminTLSJSONBody_rejectsMismatchedPairWithoutSaving(t *testing.T)
 		t.Fatalf("saved cert/key non-empty (cert=%v,key=%v), want unchanged", cert != "", key != "")
 	}
 }
+
+// R73 LBH-F9：2 MiB MaxBytesReader 上限超限 body 须 413（原恒 400，与规则域
+// 413 口径不一致）。JSON 通道两入口（保存/预检）同门。
+func TestAdminTLSOversizedBodyReturns413(t *testing.T) {
+	// Given：超过 2 MiB 的 JSON 体（cert_file 承载超长 PEM 串）
+	body := `{"mode":"selfsigned","cert_file":"` + strings.Repeat("a", (2<<20)+64) + `"}`
+	newRouter := func(handler gin.HandlerFunc, method, path string) *gin.Engine {
+		router := gin.New()
+		router.Handle(method, path, handler)
+		return router
+	}
+	send := func(router *gin.Engine, method, path string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(method, path, strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		return response
+	}
+
+	// When：保存与预检两入口各发一次超限请求
+	updateResponse := send(newRouter((&Handlers{cfg: &config.Config{}}).UpdateAdminTLS, http.MethodPut, "/admin-tls"), http.MethodPut, "/admin-tls")
+	inspectResponse := send(newRouter((&Handlers{cfg: &config.Config{}}).InspectAdminTLSCert, http.MethodPost, "/admin-tls/inspect"), http.MethodPost, "/admin-tls/inspect")
+
+	// Then：均为 413（非 400）
+	if updateResponse.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("PUT /admin-tls oversized status=%d body=%s, want 413", updateResponse.Code, updateResponse.Body.String())
+	}
+	if inspectResponse.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("POST /admin-tls/inspect oversized status=%d body=%s, want 413", inspectResponse.Code, inspectResponse.Body.String())
+	}
+}

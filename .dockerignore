@@ -37,3 +37,12 @@ docs/
 .agent/
 .superpowers/
 story.md
+# 本地测试/AI 会话产物（第 73 轮审计 S-1：.gitignore 均已列，防构建上下文
+# 上传远端 builder 时泄漏本地测试数据/会话产物；均非 Dockerfile COPY 源）。
+.playwright-mcp/
+test-data/
+test-ui/
+.worktrees/
+openspec/
+.omo/
+.sisyphus/

@@ -220,7 +220,7 @@ func attachSectionSync(ctx context.Context, s *ClusterService, nodes []models.Cl
 	if !hasReport {
 		return
 	}
-	switches, err := readSyncSwitches(s.db)
+	switches, err := readSyncSwitches(ctx, s.db)
 	if err != nil {
 		Logf("warn", "读取同步开关失败（分区同步状态降级省略）: %v", err)
 		return

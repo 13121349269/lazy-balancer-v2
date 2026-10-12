@@ -90,7 +90,7 @@
             <!-- 触发阶段四分类：信任名单 / IP 访问控制（黑白名单+地域+威胁库，点击看触发详情）/
                  WAF（CRS=详情+快捷排除弹框；自定义=规则详情弹框）/ 请求体异常（纯文本） -->
             <el-link v-if="stageCategory(row) === 'waf'" type="primary" @click="openTriggerDetail(row)">WAF</el-link>
-            <el-link v-else-if="isIpAclFamily(row) || stageCategory(row) === 'trust'" type="primary" @click="openTriggerDetail(row)">{{ stageLabel(row) }}</el-link>
+            <el-link v-else-if="['acl', 'trust'].includes(stageCategory(row))" type="primary" @click="openTriggerDetail(row)">{{ stageLabel(row) }}</el-link>
             <el-tooltip v-else-if="showTriggeredMsg(row)" :content="row.rule_msg" placement="top" :show-after="200">
               <span class="cell-tip">{{ stageLabel(row) }}</span>
             </el-tooltip>
@@ -244,15 +244,9 @@ interface SecurityEvent { id: number; event_time: string; rule_caddy_id: string;
 
 // 触发阶段分类（第 57 轮追加需求，用户裁定）：IP ACL 族=黑白名单/信任/地域/
 // 威胁库预检，统一展示「IP 访问控制」；WAF 含 CRS 与自定义两源；请求体异常独立。
-// 注：id 3/12 虽列于此族字面量，但 stageCategory 的 trust 分支先于本谓词判定
-// （模板 else-if 顺序保证信任优先）——本谓词仅供 ACL 族兜底，不构成信任归类。
-const isIpAclFamily = (row: SecurityEvent): boolean => {
-  const t = row.rule_triggered
-  if (!t) return false
-  const n = Number(t)
-  if ([2, 3, 4, 5, 7, 8, 14].includes(n)) return true
-  return n >= 800000 && n < 900000
-}
+// FE-7（第 73 轮）：原 isIpAclFamily 谓词与 stageCategory 口径重叠（且被其包含
+// ——链接门 `isIpAclFamily || stageCategory==='trust'` 等价于 stageCategory ∈
+// {acl,trust}），删除谓词，统一走 stageCategory 单一事实源。
 
 // Review66-Head ②：ctx 弹框耗时展示按族判定——仅 WAF 族（wafCrs/wafCustom/
 // body）经 WAF 段独立测量用加和式；预检族 duration_us≡precheck_us 单值展示。

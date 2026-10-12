@@ -45,7 +45,6 @@ func setupPropagationSeams(t *testing.T, authServers []string) *captureLogger {
 	origInterval := propagationPollInterval
 	origDiagAfter := propagationDivergenceDiagAfter
 	origRecList := propagationRecursiveResolvers
-	origResolvers := recursiveDNSResolvers
 	origConsensusMinHits := propagationConsensusMinHits
 	origConsensusMinRounds := propagationConsensusMinRounds
 	logger := &captureLogger{}
@@ -54,7 +53,6 @@ func setupPropagationSeams(t *testing.T, authServers []string) *captureLogger {
 		propagationPollInterval = origInterval
 		propagationDivergenceDiagAfter = origDiagAfter
 		propagationRecursiveResolvers = origRecList
-		recursiveDNSResolvers = origResolvers
 		propagationConsensusMinHits = origConsensusMinHits
 		propagationConsensusMinRounds = origConsensusMinRounds
 	})

@@ -604,6 +604,22 @@ func restoreTable(ctx context.Context, tx *sql.Tx, database *sql.DB, table strin
 	return nil
 }
 
+// tcpRuleDeadFieldsResetSQL：TCP 行 HTTP 专属死值清零（七 HTTP 专属字段 +
+// NTLM 开关 + force_http1 + TLS 三字段，共 12 列 SET）的 SQL 字面量。启动迁移
+// db.migrateTCPRuleDeadFields 持有逐字相同的第二份（跨包不可共享常量）；
+// CORE-F2（第 73 轮 P4）parity 钉测试（tcp_dead_fields_parity_test.go）读取
+// 两侧源码断言 SET 列集合与 WHERE 逐字一致，防双份漂移。
+const tcpRuleDeadFieldsResetSQL = `UPDATE lb_rules SET
+	host_header='', health_check_path='', enable_compress=0, compress_types='',
+	request_body_max_size_mb=0, upstream_keepalive_timeout=0, server_tokens_hidden=0, ntlm_compatible=0, upstream_force_http1=0,
+	enable_tls=0, tls_cert='', tls_key=''
+	WHERE protocol='tcp' AND (
+		COALESCE(host_header,'')<>'' OR COALESCE(health_check_path,'')<>''
+		OR enable_compress=1 OR COALESCE(compress_types,'')<>''
+		OR request_body_max_size_mb<>0 OR upstream_keepalive_timeout<>0 OR server_tokens_hidden<>0 OR ntlm_compatible<>0 OR upstream_force_http1<>0
+		OR enable_tls=1
+	)`
+
 // normalizeRuleRowsForTransport（第 70 轮 CL-3/CL-4）：导入事务内的规则行
 // 存储归一共享实现——v1 导入与 v2 备份导入两条写路径的唯一归一点：
 // ① TCP 行 HTTP 专属七字段 + TLS 三字段死值清零（WHERE 谓词与
@@ -615,16 +631,7 @@ func restoreTable(ctx context.Context, tx *sql.Tx, database *sql.DB, table strin
 // 启动迁移的 bump cluster_version 语义刻意不在此（迁移含快照缓存失效
 // 收敛语义；导入事务本身即变更源，维持单独形态）。
 func normalizeRuleRowsForTransport(ctx context.Context, tx *sql.Tx) error {
-	if _, err := tx.ExecContext(ctx, `UPDATE lb_rules SET
-		host_header='', health_check_path='', enable_compress=0, compress_types='',
-		request_body_max_size_mb=0, upstream_keepalive_timeout=0, server_tokens_hidden=0, ntlm_compatible=0, upstream_force_http1=0,
-		enable_tls=0, tls_cert='', tls_key=''
-		WHERE protocol='tcp' AND (
-			COALESCE(host_header,'')<>'' OR COALESCE(health_check_path,'')<>''
-			OR enable_compress=1 OR COALESCE(compress_types,'')<>''
-			OR request_body_max_size_mb<>0 OR upstream_keepalive_timeout<>0 OR server_tokens_hidden<>0 OR ntlm_compatible<>0 OR upstream_force_http1<>0
-			OR enable_tls=1
-		)`); err != nil {
+	if _, err := tx.ExecContext(ctx, tcpRuleDeadFieldsResetSQL); err != nil {
 		return fmt.Errorf("规则 TCP 死值归一失败: %w", err)
 	}
 	for _, table := range []string{"lb_rules", "path_rules"} {
@@ -2732,6 +2739,16 @@ WHERE mode='off' AND json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALE
 		err = session.abort(err)
 		recordAudit(c, action+"失败", "配置备份", "清理孤儿证书任务失败: "+err.Error())
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "清理孤儿证书任务失败，已回滚: " + err.Error()})
+		return
+	}
+	// X-1（第 73 轮 P5）：规则存在但已非 ACME 自动签发态（manual/未启用/TLS
+	// 关闭）的 cert_jobs 行——上方孤儿清理只覆盖 rule_id 不在 lb_rules 的行，
+	// 此类「规则仍在」的失效任务会被续签扫描/任务列表当作活任务。谓词与续签
+	// 扫描（certjobs.go/caddy.go 的 ACME 规则判据）同口径。
+	if _, err := tx.ExecContext(ctx, "DELETE FROM cert_jobs WHERE rule_id IN (SELECT caddy_id FROM lb_rules WHERE NOT (enable_tls=1 AND tls_source='acme_dns'))"); err != nil {
+		err = session.abort(err)
+		recordAudit(c, action+"失败", "配置备份", "清理失效证书任务失败: "+err.Error())
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "清理失效证书任务失败，已回滚: " + err.Error()})
 		return
 	}
 	oidcConverged := false

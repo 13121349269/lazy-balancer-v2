@@ -520,12 +520,8 @@ watch(appLogAutoRefresh, (enabled) => {
   if (enabled) appLogTimer = setInterval(() => void fetchAppLogs(), 3000)
 })
 
-onUnmounted(() => {
-  disposed = true
-  stopAppLogTimer()
-  if (tlsProtocolFallbackTimer) clearTimeout(tlsProtocolFallbackTimer)
-  tlsProtocolFallbackTimer = null
-})
+// FE-6（第 73 轮）：onUnmounted 生命周期收尾移至 disposed/tlsProtocolFallbackTimer
+// 声明之后（见下方 TLS 段尾），消除「引用其后声明的 let」的脆弱形态。
 
 // 三分类合并(2026-09-19 用户裁定):备份分类收敛为 3 类,与集群同步节同构
 // ——全局配置并入「系统数据」、规则库并入「安全防护」。默认全选。
@@ -1283,6 +1279,15 @@ const formDataOf = (fields: Record<string, string>): FormData => {
 let tlsInspectSeq = 0
 let tlsProtocolFallbackTimer: ReturnType<typeof setTimeout> | null = null
 let disposed = false
+
+// FE-6（第 73 轮）：组件卸载收尾引用上述 tls 态与 disposed，故置于声明之后
+// （原位于 appLogTimer watch 附近、引用其后声明的 let——当前安全但形态脆弱）。
+onUnmounted(() => {
+  disposed = true
+  stopAppLogTimer()
+  if (tlsProtocolFallbackTimer) clearTimeout(tlsProtocolFallbackTimer)
+  tlsProtocolFallbackTimer = null
+})
 
 const onTlsFile = async (e: Event, kind: 'cert' | 'key') => {
   const input = e.target as HTMLInputElement

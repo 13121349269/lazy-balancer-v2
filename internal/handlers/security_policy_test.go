@@ -178,8 +178,6 @@ func TestBindRuleToPolicy_rejectsMissingPolicy(t *testing.T) {
 	}
 }
 
-var _ = models.APIResponse{}
-
 func TestListSecurityPolicies_returnsCreatedRows(t *testing.T) {
 	// Given a created policy (regression: list used to 500 on RawMessage scan)
 	setupSecurityPolicyTestDB(t)

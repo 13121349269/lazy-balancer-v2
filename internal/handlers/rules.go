@@ -499,11 +499,10 @@ func canonicalACMEDomainForJobLookup(domain string) string {
 // reversedACMEDomainForm 返回双域名集合的逆序形式；cert_jobs.domain 按排序规范
 // 形式存储，而导入备份可携带用户输入顺序的非规范行——与 certjobs.go 规则侧
 // joined+reversed 双形式匹配同型。
+// LBH-6（第 73 轮 P5）：单源收敛至 services.ReversedCertJobDomain（与
+// certjobs.reversedCertJobDomain 同实现，两侧委托）。
 func reversedACMEDomainForm(domain string) string {
-	if parts := strings.Split(domain, ","); len(parts) == 2 {
-		return parts[1] + "," + parts[0]
-	}
-	return domain
+	return services.ReversedCertJobDomain(domain)
 }
 
 // retireCertJobsForDomain 将规则下旧域证书任务退役为 disabled 终态（保留 PEM 作
@@ -1290,6 +1289,18 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	if req.TCPTryInterval == nil {
 		req.TCPTryInterval = &existingRule.TCPTryInterval
 	}
+	// LBH-1（第 73 轮 P4）：重试窗口上界自愈（http/tcp 共用字段，上界同值）——
+	// 存量/导入/直改 DB 行携带 >60000 的越界值随任意编辑归零（0=默认窗口），
+	// 避免命中新增上界门 400 死端（与 LBH-A-N1 负值自愈同格；http 侧 td=-1 是
+	// NTLM 接管态合法哨兵，不在本门，TCP 侧负值由下方 TCP 块按 LBH-A-N1 归零）。
+	if req.TCPTryDuration != nil && *req.TCPTryDuration > 60000 {
+		upperZero := 0
+		req.TCPTryDuration = &upperZero
+	}
+	if req.TCPTryInterval != nil && *req.TCPTryInterval > 60000 {
+		upperZero := 0
+		req.TCPTryInterval = &upperZero
+	}
 	if req.RequestBodyMaxSizeMB == nil {
 		req.RequestBodyMaxSizeMB = &existingRule.RequestBodyMaxSizeMB
 	}
@@ -1905,13 +1916,11 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "证书申请中，请等待完成或失败后再修改规则"})
 		return
 	}
-	if protocolChanged && req.Protocol == "tcp" {
-		if _, err := tx.Exec("DELETE FROM cert_jobs WHERE rule_id = ?", caddyID); err != nil {
-			services.Logf("error", "UpdateRule certificate cleanup error for caddy_id=%s: %v", caddyID, err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "清理旧证书任务失败"})
-			return
-		}
-	}
+	// LBH-5（第 73 轮 P5）：此处曾有 protocolChanged&&tcp 的二次
+	// `DELETE FROM cert_jobs WHERE rule_id=?`——恒 0 行 no-op：协议切到 tcp 时
+	// req.EnableTLS 已置 false，上方 orphanACME（!EnableTLS||TLSSource!="acme_dns"）
+	// 的删除已先行命中同一 rule_id（cert_jobs 按 rule_id 唯一），且 409 早退
+	// 保证无在途非终态行。文件清理段（下方 RemoveCertFiles）保留。
 
 	// F49-11：归一（weight/protocol/tls 校验）前置后走增量收敛——同内容编辑
 	// 不再 DELETE+INSERT 重建全部上游行（id 保留、不触发上游表行级同步触发器）。
@@ -2433,6 +2442,17 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		return
 	}
 	rule := rules[0]
+
+	// LBH-1（第 73 轮 P4）：重试窗口上界自愈——源行携带 >60000 越界值
+	//（API/MCP/导入/直改 DB 落库的历史值）时，副本不得原样放大并命中新增
+	// 上界门 400 死端（与 LBH-A-N1 负值自愈同格；http/tcp 上界同值）。负值
+	// 由下方 TCP 块按协议处理（http td=-1 是 NTLM 接管态合法哨兵）。
+	if rule.TCPTryDuration > 60000 {
+		rule.TCPTryDuration = 0
+	}
+	if rule.TCPTryInterval > 60000 {
+		rule.TCPTryInterval = 0
+	}
 
 	// 审计 A2-S2：tcp-TLS 死形态归一与 CreateRule/UpdateRule 同口径——源行
 	// 遗留 enable_tls=1/tls_source=acme_dns 时，副本会原样携带死形态（tcp 不

@@ -159,8 +159,10 @@ func (sw SyncSwitches) sectionEnabled(key string) bool {
 }
 
 // readSyncSwitches reads the node-local sync switches (defaults all-on for
-// missing columns/rows, e.g. pre-migration databases).
-func readSyncSwitches(dbh interface {
+// missing columns/rows, e.g. pre-migration databases). ctx 由调用方直传
+// （LBS/LBH-2 第 73 轮：不再内部 context.Background()，保持本包 ctx 透传约定
+// ——快照构建可随调用方取消）。
+func readSyncSwitches(ctx context.Context, dbh interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }) (SyncSwitches, error) {
 	sw := SyncSwitches{Users: true, Rules: true, Security: true}
@@ -172,7 +174,7 @@ func readSyncSwitches(dbh interface {
 	// ErrNoRows 分支不可达,一并收敛。三分类合并(2026-09-19)后
 	// sync_global_config/sync_waf_files 列已物理删除,读取只剩 rules/security。
 	var r, sec sql.NullBool
-	err := dbh.QueryRowContext(context.Background(), `SELECT
+	err := dbh.QueryRowContext(ctx, `SELECT
 		(SELECT sync_rules FROM global_config WHERE id=1),
 		(SELECT sync_security FROM global_config WHERE id=1)`).Scan(&r, &sec)
 	if err != nil {

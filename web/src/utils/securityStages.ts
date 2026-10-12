@@ -262,23 +262,33 @@ export const mergeIpEntryCount = (
   return refs.reduce((sum, id) => sum + (ipLists.find((l) => l.id === id)?.entry_count ?? 0), inlineCount)
 }
 
+// 生效条目合并内核：内联 ∪ 引用条目组（每项 trim 后按精确字符串去重，空串剔除）。
+// 三处调用方（本文件 / SecurityPolicies 向导 / IPLocationAction 处置页）数据源
+// 成形不同，各自薄包装后共用本内核（R73 FE-3 收敛：原三份近逐字实现）。
+export const mergeIpEntryValues = (
+  inline: readonly string[],
+  refEntryGroups: Iterable<readonly string[]>,
+): string[] => {
+  const set = new Set(inline.map((v) => v.trim()).filter((v) => v !== ''))
+  for (const entries of refEntryGroups) {
+    for (const v of entries) {
+      const trimmed = v.trim()
+      if (trimmed !== '') set.add(trimmed)
+    }
+  }
+  return [...set]
+}
+
 // 合并内联 + 引用列表条目（按精确字符串去重），缺失的引用列表跳过（防御性回退为仅内联）
 export const mergeIpEntries = (
   ipLists: readonly SecurityStageIPList[],
   inline: readonly string[],
   refs: readonly number[],
-): string[] => {
-  const set = new Set(inline.map((v) => v.trim()).filter((v) => v !== ''))
-  for (const id of refs) {
-    const list = ipLists.find((l) => l.id === id)
-    if (!list) continue
-    for (const entry of list.entries ?? []) {
-      const v = entry.value.trim()
-      if (v !== '') set.add(v)
-    }
-  }
-  return [...set]
-}
+): string[] =>
+  mergeIpEntryValues(
+    inline,
+    refs.map((id) => (ipLists.find((l) => l.id === id)?.entries ?? []).map((e) => e.value)),
+  )
 
 // 阶段页覆盖解析：pageId<=0 → null（跟随策略）；页已删/内容空 → broken
 export const resolveStageOverride = (
@@ -871,6 +881,9 @@ export const IP_LIST_CATEGORIES = ['搜索引擎爬虫', 'CDN 节点', '云服�
 //   ''→other；11→body；9\\d{5}→wafCrs；\\d{5}与 1 开头≥7 位→wafCustom（合成
 //   自定义，R59-P3）；3/12→trust；14→threat；800000-899999→geoip；2/4/5/7/8
 //   （含遗留共享 GeoIP id:8，R59-P3 列表列同口径）→ipAcl；其余→other。
+//   FE-9（第 73 轮登记）：合成自定义 id 上界段 [900000,1000000)（DB 规则 id
+//   ≥90000 → 触发 id ≥910000，会与 9\\d{5} CRS 段重叠）——自定义规则 id 达 9 万
+//   不现实（不可达），边界不修，仅登记留痕。
 export const triggerStageFamily = (ruleTriggered: string): 'trust' | 'ipAcl' | 'geoip' | 'threat' | 'wafCustom' | 'wafCrs' | 'body' | 'other' => {
   const t = ruleTriggered ?? ''
   if (!t) return 'other'

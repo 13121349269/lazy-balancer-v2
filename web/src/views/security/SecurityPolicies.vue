@@ -901,7 +901,7 @@ import type { CrsExcludedRow, CrsRuleOptionView } from '@/composables/useCrsRule
 import type { APIResponse, UserListItem } from '@/types'
 import SecurityBindingEditor from '@/components/SecurityBindingEditor.vue'
 import DialogHeader from '@/components/DialogHeader.vue'
-import { POLICY_TYPE_LABELS, POLICY_TYPE_SHORT_LABELS, STAGE_BLOCK_STATUS_OPTIONS, buildStageModel, formatAclModeDetail, hasGeoIPControl, hasIPACLControl, hasTrustEntries, inferPolicyType, mergeIpEntryCount, parseRefIds, IP_LIST_CATEGORIES} from '@/utils/securityStages'
+import { POLICY_TYPE_LABELS, POLICY_TYPE_SHORT_LABELS, STAGE_BLOCK_STATUS_OPTIONS, buildStageModel, formatAclModeDetail, hasGeoIPControl, hasIPACLControl, hasTrustEntries, inferPolicyType, mergeIpEntryCount, mergeIpEntryValues, parseRefIds, IP_LIST_CATEGORIES} from '@/utils/securityStages'
 import type { RuleStageModel, SecurityPolicyType, SecurityStagePolicy } from '@/utils/securityStages'
 
 interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist?: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; waf_check_response?: boolean; log_request_body?: boolean; trust_detection?: boolean }
@@ -1382,20 +1382,11 @@ const fetchIpLists = async (seq?: number): Promise<void> => {
     ipLists.value = res.data || []
   } catch { /* 静默失败：引用选择器退化为空列表，冲突比较回退内联口径 */ }
 }
-// 合并内联 + 引用列表条目（按精确字符串去重，与 v1 匹配口径一致）；
-// 缓存中缺失的引用列表跳过（防御性回退为仅内联）
-const mergeIpEntries = (inline: string[], refs: number[]): string[] => {
-  const set = new Set(inline.map((v) => v.trim()).filter((v) => v !== ''))
-  for (const id of refs) {
-    const entries = ipListDetails.value[id]
-    if (!entries) continue // 详情未加载/加载失败：防御性回退为仅内联
-    for (const entry of entries) {
-      const v = entry.value.trim()
-      if (v !== '') set.add(v)
-    }
-  }
-  return [...set]
-}
+// 合并内联 + 引用列表条目（按精确字符串去重，与 v1 匹配口径一致）；缓存中缺失的
+// 引用列表跳过（防御性回退为仅内联）。内核统一在 utils/securityStages
+// mergeIpEntryValues（R73 FE-3 收敛），本处仅适配 ipListDetails 数据源成形。
+const mergeIpEntries = (inline: string[], refs: number[]): string[] =>
+  mergeIpEntryValues(inline, refs.map((id) => (ipListDetails.value[id] ?? []).map((e) => e.value)))
 // 条数-only 合并口径（列表页摘要用，不拉条目值）：内联去重数 + Σ引用名单
 // entry_count。与 mergeIpEntries 的去重合计可能略有出入（内联与引用重叠时），
 // 仅作列表页一行摘要展示；精确合计以向导内（条目已加载）为准。
@@ -2846,6 +2837,10 @@ const resetWizard = () => {
   editingPolicyType.value = null
   rulePickerVisible.value = false
   ruleBoundPolicies.value = {}
+  // FE-2（第 73 轮）：阶段页覆盖编辑暂存须随向导复位清空——否则编辑策略 A
+  // 暂存的覆盖会跨会话泄漏到绑定同规则的策略 B（保存写入 A 的暂存值）。
+  stageOverrideEdits.value = {}
+  stageOverrideSaving.value = {}
 }
 
 const beforeWizardClose = (done: () => void): void => {

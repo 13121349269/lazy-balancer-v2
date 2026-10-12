@@ -198,5 +198,13 @@ func (session *configImportSession) cleanupDisappearedRuleArtifacts() {
 		services.RecordAuditLog("system", "清理失败", "证书任务", fmt.Sprintf("导入后清理孤儿证书任务失败：%v", err), "")
 		return
 	}
+	// X-1（第 73 轮 P5）：规则存在但已非 ACME 自动签发态的失效任务行——与
+	// v2 导入事务内同谓词清理；覆盖 v1 路径与理论绕过路径。
+	if _, err := db.DB.ExecContext(session.ctx,
+		`DELETE FROM cert_jobs WHERE rule_id IN (SELECT caddy_id FROM lb_rules WHERE NOT (enable_tls=1 AND tls_source='acme_dns'))`); err != nil {
+		services.Logf("error", "导入清理：删除失效证书任务失败: %v", err)
+		services.RecordAuditLog("system", "清理失败", "证书任务", fmt.Sprintf("导入后清理失效证书任务失败：%v", err), "")
+		return
+	}
 	services.RecordAuditLog("system", "清理", "证书产物", fmt.Sprintf("导入移除 %d 条规则，已清理其证书文件与任务行", len(disappeared)), "")
 }

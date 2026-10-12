@@ -134,6 +134,11 @@ var (
 )
 
 func getTaskLogSizeBytes() int64 {
+	// SVC-F2（第 73 轮）：未初始化库回退默认 10MB，不得 nil deref（当前
+	// 不可达；与同包多数配置读取 helper 的 db.DB==nil 守卫口径一致）。
+	if db.DB == nil {
+		return 10 * 1024 * 1024
+	}
 	now := time.Now().UnixNano()
 	cachedAt := certJobLogSizeCachedAt.Load()
 	if cachedAt != 0 && now-cachedAt < certJobLogSizeCacheTTLNs {

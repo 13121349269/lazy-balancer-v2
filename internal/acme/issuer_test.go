@@ -495,7 +495,7 @@ func TestIssuer_checkRecursiveDNS_outlasts_negative_cache_churn(t *testing.T) {
 	)
 
 	restoreSeams := func(origResolvers []string, origInterval, origDeadline time.Duration) {
-		recursiveDNSResolvers = origResolvers
+		propagationRecursiveResolvers = origResolvers
 		recursiveDNSPollInterval = origInterval
 		recursiveDNSDeadline = origDeadline
 	}
@@ -525,12 +525,12 @@ func TestIssuer_checkRecursiveDNS_outlasts_negative_cache_churn(t *testing.T) {
 	}
 
 	scaleSeams := func(interval, deadline time.Duration) {
-		recursiveDNSResolvers = []string{newNegativeThenHitResolver(t)}
+		propagationRecursiveResolvers = []string{newNegativeThenHitResolver(t)}
 		recursiveDNSPollInterval = interval / speedup
 		recursiveDNSDeadline = deadline / speedup
 	}
 
-	origResolvers, origInterval, origDeadline := recursiveDNSResolvers, recursiveDNSPollInterval, recursiveDNSDeadline
+	origResolvers, origInterval, origDeadline := propagationRecursiveResolvers, recursiveDNSPollInterval, recursiveDNSDeadline
 	t.Cleanup(func() { restoreSeams(origResolvers, origInterval, origDeadline) })
 	issuer := &Issuer{}
 

@@ -1567,8 +1567,17 @@ func TestDeleteRule_queuedOnlyJobIsNotBlocked(t *testing.T) {
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/rules/lb_del_queued", nil))
 
-	if rec.Code == http.StatusConflict {
-		t.Fatalf("queued-only job must not trigger 409: body=%s", rec.Body.String())
+	// NEW-4（第 73 轮 P5）：此前只排他断言非 409——成功态与规则删除终态无钉。
+	// 补 200 成功态 + 规则行确实删除（queued 任务走快速删除路径）。
+	if rec.Code != http.StatusOK {
+		t.Fatalf("queued-only job must allow fast delete: status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	var remaining int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM lb_rules WHERE caddy_id='lb_del_queued'`).Scan(&remaining); err != nil {
+		t.Fatalf("read rule count: %v", err)
+	}
+	if remaining != 0 {
+		t.Fatalf("deleted rule rows=%d, want 0（删除须落库）", remaining)
 	}
 }
 

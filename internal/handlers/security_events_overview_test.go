@@ -660,10 +660,19 @@ func TestRuleTriggeredFilterSQL_singleDigitFamiliesUseExactMatch(t *testing.T) {
 			t.Fatalf("单数字族参数不得带 %% 通配: %v", args)
 		}
 	}
-	// 自定义规则 ID 不得命中 IP 族条件
+	// 自定义规则族不得命中 IP 族条件：其条件由长度约束的 GLOB 承载（非 LIKE
+	// 前缀），且不追加查询参数（第 73 轮 F12：原 _ = customSQL 为假断言）。
 	var customArgs []any
 	customSQL := ruleTriggeredFilterSQL("自定义规则", &customArgs)
-	_ = customSQL
+	if strings.Contains(customSQL, "LIKE") {
+		t.Fatalf("自定义规则族不得用 LIKE 前缀匹配: %s", customSQL)
+	}
+	if !strings.Contains(customSQL, customRuleFamilyCondition) {
+		t.Fatalf("自定义规则族须含长度约束条件 %q: %s", customRuleFamilyCondition, customSQL)
+	}
+	if len(customArgs) != 0 {
+		t.Fatalf("自定义规则族不得追加查询参数: %v", customArgs)
+	}
 }
 
 func TestCategorizeAttack_bodyProcessorErrorAndNoCrossFamily(t *testing.T) {

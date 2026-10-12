@@ -69,7 +69,7 @@ func overrideTestWafPaths(t *testing.T) (crsDir, xdbPath string) {
 func TestLbbakImport_sectionsQueryScoped(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	g := newBackupSectionRouter(h)
-	crsDir, xdbPath := overrideTestWafPaths(t)
+	_, xdbPath := overrideTestWafPaths(t)
 	// 本地 xdb(旧内容,导入不应覆盖)
 	if err := os.WriteFile(xdbPath, []byte("LOCAL-XDB"), 0o644); err != nil {
 		t.Fatal(err)
@@ -103,7 +103,6 @@ func TestLbbakImport_sectionsQueryScoped(t *testing.T) {
 	if err != nil || string(got) != "LOCAL-XDB" {
 		t.Fatalf("unselected waf_files must not land, xdb=%q err=%v", string(got), err)
 	}
-	_ = crsDir
 }
 
 // R39-11:password_version 吊销收窄为「选中系统数据」——仅规则导入不吊销,

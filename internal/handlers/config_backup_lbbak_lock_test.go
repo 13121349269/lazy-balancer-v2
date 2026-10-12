@@ -190,8 +190,7 @@ func TestBuildLbbakExport_blocks_while_waf_file_lock_held(t *testing.T) {
 func TestLbbakImport_commit_failure_does_not_log_crs_success(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	g := newBackupSectionRouter(h)
-	crsDir, xdbPath := overrideTestWafPaths(t)
-	_ = xdbPath
+	crsDir, _ := overrideTestWafPaths(t)
 	// 分类导入不动 users：管理员守卫读本地——种一名本地启用管理员
 	if _, err := db.DB.Exec(`INSERT INTO users (id,username,password_hash,role,is_enabled) VALUES (6,'local-admin-l66','hash','admin',1)`); err != nil {
 		t.Fatalf("seed local admin: %v", err)
@@ -254,8 +253,7 @@ func TestLbbakImport_commit_failure_does_not_log_crs_success(t *testing.T) {
 func TestLbbakImport_commit_success_logs_crs_reload_and_success(t *testing.T) {
 	h := newBackupTestHandlers(t) // 默认 caddy stub 接受 /load → commit 成功
 	g := newBackupSectionRouter(h)
-	crsDir, xdbPath := overrideTestWafPaths(t)
-	_ = xdbPath
+	crsDir, _ := overrideTestWafPaths(t)
 	if _, err := db.DB.Exec(`INSERT INTO users (id,username,password_hash,role,is_enabled) VALUES (6,'local-admin-l66b','hash','admin',1)`); err != nil {
 		t.Fatalf("seed local admin: %v", err)
 	}

@@ -129,7 +129,7 @@ func (s *ClusterService) cachedSnapshot(ctx context.Context) (models.ClusterSnap
 	// D2-S2：开关读取失败必须报错——空缓存键 + nil 开关会把主节点 sync_users=0
 	// 等关闭保护在该份快照内绕过（从节点 computeSectionSkips 回退全开默认值），
 	// 且无自愈路径。无法确认权威开关状态时不得发布快照。
-	switches, err := readSyncSwitches(s.db)
+	switches, err := readSyncSwitches(ctx, s.db)
 	if err != nil {
 		return models.ClusterSnapshot{}, nil, "", fmt.Errorf("读取同步开关: %w", err)
 	}
@@ -179,7 +179,7 @@ func (s *ClusterService) buildFullSnapshot(ctx context.Context, store snapshotSt
 	}
 	snapshot.WafFiles = BuildWafFileRef()
 	// D2-S2：与缓存键侧同口径——读不到权威开关时不得发布 nil 开关快照。
-	switches, err := readSyncSwitches(s.db)
+	switches, err := readSyncSwitches(ctx, s.db)
 	if err != nil {
 		return models.ClusterSnapshot{}, fmt.Errorf("读取主节点同步开关: %w", err)
 	}

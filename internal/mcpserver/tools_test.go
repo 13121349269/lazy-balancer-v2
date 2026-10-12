@@ -33,8 +33,10 @@ func TestListToolSpecs_returns_sanitized_independent_copy(t *testing.T) {
 		if spec.Name == "" || spec.Description == "" || spec.Method == "" || !strings.HasPrefix(spec.Path, "/api/v1/") {
 			t.Fatalf("tool %d has incomplete public metadata: %+v", index, spec)
 		}
-		if spec.ReadOnly != (spec.Method == http.MethodGet) {
-			t.Fatalf("tool %s read_only=%v method=%s", spec.Name, spec.ReadOnly, spec.Method)
+		_, probe := ReadOnlyProbeTools[spec.Name]
+		_, hidden := readOnlyHiddenTools[spec.Name]
+		if wantReadOnly := (spec.Method == http.MethodGet && !hidden) || probe; spec.ReadOnly != wantReadOnly {
+			t.Fatalf("tool %s read_only=%v method=%s probe=%v hidden=%v, want %v", spec.Name, spec.ReadOnly, spec.Method, probe, hidden, wantReadOnly)
 		}
 		if len(spec.InputSchema) > 0 {
 			var shape map[string]any

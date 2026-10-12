@@ -482,7 +482,9 @@ func TestReloadCaddy_records_failure_audit_with_error_detail(t *testing.T) {
 		t.Fatalf("status=%d body=%s, want 500", response.Code, response.Body.String())
 	}
 	var detail string
-	if err := db.AuditDB.QueryRow("SELECT COALESCE(detail,'') FROM audit_log WHERE action='重载失败' AND detail LIKE '%结果：failure%'").Scan(&detail); err != nil {
+	// SVC-F1（第 73 轮）：failure 结果码补中文映射后渲染为「结果：失败」（此前
+	// 未映射原样输出英文 "failure"），断言随渲染口径同步。
+	if err := db.AuditDB.QueryRow("SELECT COALESCE(detail,'') FROM audit_log WHERE action='重载失败' AND detail LIKE '%结果：失败%'").Scan(&detail); err != nil {
 		t.Fatalf("reload failure audit row missing: %v", err)
 	}
 	if !strings.Contains(detail, "admin api exploded") {

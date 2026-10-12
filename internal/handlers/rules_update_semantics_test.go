@@ -126,7 +126,7 @@ func TestDuplicateRule_copiesSecurityPolicyBindings(t *testing.T) {
 	// Given：源规则绑定两条策略
 	handler, _, _ := newAuditRuleHandlers(t, 0)
 	seedAuditRule(t, "lb_dupbind", "dup-bind", "dupbind.example.test", 8080, false, "manual", false)
-	for i, name := range []string{"bind-a", "bind-b"} {
+	for _, name := range []string{"bind-a", "bind-b"} {
 		res, err := db.DB.Exec(`INSERT INTO security_policies (name,mode,policy_type,enabled) VALUES (?, 'off', 'stage3', 1)`, name)
 		if err != nil {
 			t.Fatal(err)
@@ -135,7 +135,6 @@ func TestDuplicateRule_copiesSecurityPolicyBindings(t *testing.T) {
 		if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_dupbind',?)`, pid); err != nil {
 			t.Fatal(err)
 		}
-		_ = i
 	}
 	router := gin.New()
 	router.POST("/rules/:caddy_id/duplicate", handler.DuplicateRule)

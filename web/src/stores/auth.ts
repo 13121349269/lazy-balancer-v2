@@ -84,6 +84,9 @@ export const useAuthStore = defineStore('auth', () => {
     if (readOnlyReason.value === 'unknown') return '信息加载中，暂以只读模式呈现'
     return ''
   })
+  // FE-4（第 73 轮）：从节点判定单一事实源——Keys/Users/SecurityRules 曾各自
+  // 复写 `nodeMode==='slave'`/`readOnlyReason==='slave'` 派生，收敛到本 getter。
+  const isSlaveNode = computed(() => nodeMode.value === 'slave')
 
   let userRetryTimer: number | null = null
 
@@ -329,6 +332,7 @@ interface LoginResult {
     intentionalLogout,
     currentPage,
     isLoggedIn,
+    isSlaveNode,
     readOnlyReason,
     readOnlyMessage,
     login,

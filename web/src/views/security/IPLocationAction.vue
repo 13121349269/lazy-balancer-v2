@@ -84,7 +84,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useTrustAssociation } from '@/composables/useTrustAssociation'
 import type { IpListOption } from '@/composables/useIpListAdd'
 // 分组类型路由（U8-2）：inferPolicyType 为策略类型单一实现（securityStages 导出，禁第二实现）
-import { inferPolicyType, parseIPList, parseRefIds, entryMatchesIp, invalidateSharedEntriesCache } from '@/utils/securityStages'
+import { inferPolicyType, parseIPList, parseRefIds, entryMatchesIp, invalidateSharedEntriesCache, mergeIpEntryValues } from '@/utils/securityStages'
 import { popperViewportSafe } from '@/utils/popper'
 import type { SecurityPolicyType, SecurityPolicyTypeInput } from '@/utils/securityStages'
 import type { APIResponse } from '@/types'
@@ -248,17 +248,11 @@ const loadIpLists = async (): Promise<void> => {
 
 
 
-// 生效名单 = 内联 ∪ 引用列表条目（精确字符串去重，与向导 mergeIpEntries 同口径）；
-// 缓存中缺失的引用列表跳过（防御性回退为仅内联）
-const mergeIpEntries = (inline: string[], refs: number[]): string[] => {
-  const set = new Set(inline.map((v) => v.trim()).filter((v) => v !== ''))
-  for (const id of refs) {
-    const entries = ipListEntries.value[id]
-    if (!entries) continue
-    for (const v of entries) set.add(v)
-  }
-  return [...set]
-}
+// 生效名单 = 内联 ∪ 引用列表条目（精确字符串去重，与向导同口径）；缓存中缺失的
+// 引用列表跳过（防御性回退为仅内联）。内核统一在 utils/securityStages
+// mergeIpEntryValues（R73 FE-3 收敛），本处仅适配 ipListEntries 数据源成形。
+const mergeIpEntries = (inline: string[], refs: number[]): string[] =>
+  mergeIpEntryValues(inline, refs.map((id) => ipListEntries.value[id] ?? []))
 
 // 每策略生效 ACL / 信任名单（内联 ∪ 引用），状态展示与语义反转守卫共用
 const mergedAclEntries = (policy: PolicyRow): string[] =>

@@ -916,6 +916,22 @@ func IsStage1PrecheckID(n int) bool {
 	return IsGeoIPPrecheckID(n)
 }
 
+// Stage1PrecheckIDSQLList 是预检段固定规则 ID 的 SQL 字面量清单（8 项）——
+// 与 IsStage1PrecheckID 同文件维护（R73 LBH-F8：原居 securityevents.go，
+// 与 Go 谓词分居两文件，阶段 1 新增预检 id 时易漏改）。3/5/12 为防御性包含
+// ——当前 nolog pass 不产事件（第 62 轮 F62-40 三处字面量收敛沿用）。
+const Stage1PrecheckIDSQLList = "('2','3','4','5','7','8','12','14')"
+
+// Stage1PrecheckSegmentSQL 是阶段 1 预检段（IP 访问控制/威胁情报库/地域拦截）
+// 事件归因的完整 SQL 谓词单一事实源——rule_triggered（文本 id）落在本段即
+// 阶段 1：固定 ID 清单 Stage1PrecheckIDSQLList ∪ GeoIP 预检归因段
+// [geoipPrecheckRuleBase, +100000) 的 6 位文本形态（8 开头 6 位）。
+// 消费方：handlers.GetRuleStageStats 分段耗时归因（第 73 轮 LBH-F8 收敛：原
+// 内联 "IN %s OR (LENGTH=6 AND LIKE '8%%')" 与 ID 清单分居两文件两处字面量）。
+// 与 IsStage1PrecheckID 同文件维护，一致性由 security_stage1_segment_test.go 钉死。
+const Stage1PrecheckSegmentSQL = "rule_triggered IN " + Stage1PrecheckIDSQLList +
+	" OR (LENGTH(rule_triggered)=6 AND rule_triggered LIKE '8%')"
+
 // intersectIPLists 返回多组 IP/CIDR 名单的网络感知交集（裁定 2026-09-07 S2）：
 // 对每对条目判断 CIDR 包含关系，保留更具体的一方（10.0.0.0/8 ∩ 10.1.0.5
 // = 10.1.0.5）。字符串精确匹配兼容（相同文本=同网络）。空交集返回 nil。

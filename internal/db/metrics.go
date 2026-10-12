@@ -27,7 +27,9 @@ func nextQuarantinePath(path string) string {
 	for i := 1; ; i++ {
 		candidate := base
 		if i > 1 {
-			candidate = fmt.Sprintf("%s-%d", base, i)
+			// CORE-F1（第 73 轮）：后缀从 -1 起（i-1）——旧式 i 使序号
+			// 跳号（base→base-2，base-1 永不生成）。
+			candidate = fmt.Sprintf("%s-%d", base, i-1)
 		}
 		if _, err := os.Stat(candidate); errors.Is(err, os.ErrNotExist) {
 			return candidate

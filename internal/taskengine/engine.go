@@ -188,13 +188,14 @@ func (e *Engine) SetRole(isMaster bool) {
 	// Daemon 生命周期随角色翻转：master-only daemon 在 demote 时停止、
 	// promote 时拉起（loopEnabled 保持用户调度开关语义）。SetRole 重申
 	// （生产启动/翻转期为三连调用）不是重启意图——tryStartDaemon 传
-	// false，不再误栽 pendingRestart（U1-66-01）。Periodic 不启停，仅
-	// 角色真实获得时置零节拍使下一 tick 即到期（U1-66-02：原置零分支
-	// 位于仅收集 Daemon 的切片内不可达）。F-L2-68-01（第 68 轮）：
-	// Scheduled 在途 Run 随角色不符中止——demote 后继续跑完会让从节点
-	// 写版本行/名单/规则树，打破只读不变量；取消经 rc.Ctx 传播，三库
-	// Run 体据此落 skipped（与起点角色复查同语义）。promote 无需动作
-	// （tick 每轮重读 NextSlotFn 自动到点触发）。
+	// false，不再误栽 pendingRestart（U1-66-01）。Periodic 不启停：角色真实
+	// 获得时置零节拍使下一 tick 即到期（U1-66-02：原置零分支位于仅收集
+	// Daemon 的切片内不可达）；角色不符时中止在途 Run（X-3 第 73 轮，与
+	// Scheduled 同型）。F-L2-68-01（第 68 轮）：Scheduled 在途 Run 随角色
+	// 不符中止——demote 后继续跑完会让从节点写版本行/名单/规则树，打破
+	// 只读不变量；取消经 rc.Ctx 传播，三库 Run 体据此落 skipped（与起点
+	// 角色复查同语义）。promote 无需动作（tick 每轮重读 NextSlotFn 自动
+	// 到点触发）。
 	e.mu.RLock()
 	targets := make([]*registration, 0, len(e.regs))
 	for _, r := range e.regs {
@@ -205,7 +206,21 @@ func (e *Engine) SetRole(isMaster bool) {
 	e.mu.RUnlock()
 	for _, r := range targets {
 		if r.desc.Kind == KindPeriodic {
-			if flipped && e.roleAllows(r.desc.RunsOn) {
+			// X-3（第 73 轮）：角色不符（demote/重申从节点）时取消在途 Run——
+			// 与下方 Scheduled 分支同型（F-L2-68-01 同族）。Periodic 在途 Run
+			// （tick/手动触发）跑完会让从节点写库，打破只读不变量；取消经
+			// rc.Ctx 传播，Run 体据此落 skipped。loopEnabled 保留——promote 后
+			// tick 自动恢复排程。
+			if !e.roleAllows(r.desc.RunsOn) {
+				r.mu.Lock()
+				c := r.cancel
+				r.mu.Unlock()
+				if c != nil {
+					c()
+				}
+				continue
+			}
+			if flipped {
 				r.mu.Lock()
 				r.lastCheck = time.Time{}
 				r.mu.Unlock()

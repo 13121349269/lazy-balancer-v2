@@ -110,6 +110,7 @@
             <div class="trg-kv"><span class="k">动作</span><span>{{ customActionLabel }}<template v-if="customRule.action === 'score'">（{{ customRule.score }} 分）</template></span></div>
             <div class="trg-kv"><span class="k">状态</span><span>{{ customRule.enabled ? '启用' : '禁用' }}</span></div>
           </template>
+          <div v-else-if="!loading && customRuleLoadError" class="trg-tip">自定义规则加载失败，可关闭弹框后重新打开重试（事件为历史记录，展示不完整）</div>
           <div v-else-if="!loading" class="trg-tip">未找到该自定义规则（可能已被删除；事件为历史记录）</div>
           <div class="trg-tip">自定义规则 id {{ customDbId }}（事件携带的触发 id = 规则 id + 10000）。编辑请前往 安全防护 → 规则集 → 自定义规则。</div>
         </template>

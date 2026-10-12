@@ -367,3 +367,42 @@ func TestEngine_DemoteCancelsInFlightScheduled(t *testing.T) {
 		t.Fatalf("在途中止终态=%v, want cancelled", lr)
 	}
 }
+
+// Given master-only Periodic 任务在途（Run 阻塞于 rc.Ctx.Done）。
+// When demote（SetRole(false)，生产形态）。
+// Then 在途 Run 被中止且终态落 cancelled（X-3 第 73 轮：Periodic 分支曾仅在
+// 角色获得时置零节拍，demote 不取消在途 Run——与 Scheduled 分支同型的只读
+// 不变量破坏：从节点写面继续跑完。本测试钉「镜像 Scheduled 取消」）。
+func TestEngine_DemoteCancelsInFlightPeriodic(t *testing.T) {
+	e := newTestEngine(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	e.Register(Descriptor{ID: "t-periodic", Family: "t", Name: "周期", Kind: KindPeriodic, RunsOn: RoleMasterOnly,
+		// TASK-L2（第 69 轮）配套：Periodic 注册必须带 IntervalFn（长间隔——
+		// tick 不触发，本测试经 Trigger 驱动在途形态）。
+		IntervalFn: func() time.Duration { return time.Hour },
+		Run: func(rc RunContext) error {
+			close(started)
+			select {
+			case <-rc.Ctx.Done():
+				return rc.Ctx.Err()
+			case <-release:
+				return nil
+			}
+		}})
+
+	runDone := make(chan struct{})
+	go func() { _ = e.Trigger("t-periodic", "auto", ""); close(runDone) }()
+	<-started
+	e.SetRole(false)
+
+	select {
+	case <-runDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("demote 未中止在途 Periodic Run（跑完才退出=旧形态）")
+	}
+	if lr := e.LatestRun("t-periodic"); lr == nil || lr.Status != "cancelled" {
+		t.Fatalf("在途中止终态=%v, want cancelled", lr)
+	}
+}

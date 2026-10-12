@@ -22,6 +22,26 @@ var ReadOnlyProbeTools = map[string]struct{}{
 	"validate_import": {}, "preview_config": {},
 }
 
+// readOnlyHiddenTools 是「GET 但对只读 Key 不可见」的工具（M8：export_config
+// 走 apiKeyReadOnlyGuard 403，只读 Key 不可见，避免呈现必然 403 的工具）。
+// 与 ReadOnlyProbeTools 同为 ListToolSpecs.read_only 元数据与
+// serveWithToolVisibility 可见性过滤的单一事实源（R73 MISC-F1：原仅局部于
+// filterReadOnlyTools，public 元数据与可见性过滤各自维护易漂移）。
+var readOnlyHiddenTools = map[string]struct{}{"export_config": {}}
+
+// isReadOnlyTool 报告工具对只读 API Key 是否「只读可用」——GET 且非隐藏工具，
+// 或读探测 POST 白名单（ReadOnlyProbeTools）。ListToolSpecs.read_only 元数据与
+// filterReadOnlyTools 可见性过滤共用本判据（单一事实源，消除能力与可见性漂移）。
+func isReadOnlyTool(spec toolSpec) bool {
+	if spec.method == http.MethodGet {
+		if _, hidden := readOnlyHiddenTools[spec.name]; !hidden {
+			return true
+		}
+	}
+	_, probe := ReadOnlyProbeTools[spec.name]
+	return probe
+}
+
 func serveWithToolVisibility(writer http.ResponseWriter, request *http.Request, next http.Handler, resolver readOnlyResolver) {
 	requestBody, err := io.ReadAll(request.Body)
 	if err != nil {
@@ -109,22 +129,12 @@ func filterReadOnlyTools(response []byte) ([]byte, error) {
 	if err := json.Unmarshal(result["tools"], &toolsArr); err != nil {
 		return nil, fmt.Errorf("解析 tools/list tools: %w", err)
 	}
-	// readOnlyHiddenTools：GET 但对只读 Key 禁用的工具（M8：export_config 走
-	// apiKeyReadOnlyGuard 403，只读 Key 不可见，避免呈现必然 403 的工具）。
-	readOnlyHiddenTools := map[string]struct{}{"export_config": {}}
-	// ApiMcp-新1(第 2 轮审计):REST 只读白名单(auditpolicy.go readOnlyWriteRoutes)
-	// 对只读 Key 开放的读探测 POST 对应的 MCP 工具——转发侧守卫可通过,
-	// tools/list 须对只读 Key 可见(消除能力与可见性漂移)。清单=包级
-	// ReadOnlyProbeTools 单一事实源（第 51 轮 P5-4，钉测试直接消费）。
+	// 只读 Key 可见集合 = 包级 isReadOnlyTool 判据（GET 且非隐藏 + 读探测 POST
+	// 白名单），与 ListToolSpecs.read_only 元数据同源（R73 MISC-F1 收敛；第 51 轮
+	// P5-4 已把探测清单收敛为 ReadOnlyProbeTools，钉测试直接消费）。
 	readOnlyNames := make(map[string]struct{}, len(tools))
 	for _, spec := range tools {
-		if spec.method == http.MethodGet {
-			if _, hidden := readOnlyHiddenTools[spec.name]; !hidden {
-				readOnlyNames[spec.name] = struct{}{}
-			}
-		}
-		// 只读 Key 可见的读探测 POST 工具(REST 白名单同口径)
-		if _, probe := ReadOnlyProbeTools[spec.name]; probe {
+		if isReadOnlyTool(spec) {
 			readOnlyNames[spec.name] = struct{}{}
 		}
 	}

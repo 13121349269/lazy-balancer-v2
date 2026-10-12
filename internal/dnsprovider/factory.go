@@ -66,8 +66,10 @@ func newProviderFromCredentials(rawJSON, dataDir string) (Provider, error) {
 	}
 
 	// 迁移早于 mode 字段落库的存量行只带凭证字段本身：按字段形态推断
-	// provider（APIToken→DNSPod token；SecretID+SecretKey→腾讯云 secret），
-	// 仅在两类凭证并存（歧义）或全部缺失时才拒绝。
+	// provider（APIToken→DNSPod token；SecretID+SecretKey→腾讯云 secret）。
+	// 无法判定时给出可诊断的分流文案（A-1 第 73 轮）：两类凭证并存=歧义
+	// （需显式 mode 消歧）；全缺/不完整=缺失（需补齐凭证）。原实现两者同落
+	// default 的「unsupported dns provider mode: 」（mode 为空），排障无法区分。
 	if creds.Mode == "" {
 		hasToken := creds.APIToken != ""
 		hasSecret := creds.SecretID != "" && creds.SecretKey != ""
@@ -76,6 +78,10 @@ func newProviderFromCredentials(rawJSON, dataDir string) (Provider, error) {
 			creds.Mode = "dnspod"
 		case hasSecret && !hasToken:
 			creds.Mode = "tencent"
+		case hasToken && hasSecret:
+			return nil, fmt.Errorf("DNS 凭证歧义：api_token 与 secret_id/secret_key 同时存在，无法判定提供商（请显式指定 mode=dnspod 或 mode=tencent）")
+		default:
+			return nil, fmt.Errorf("DNS 凭证缺失或不足以判定提供商（需 api_token，或 secret_id+secret_key；也可显式指定 mode）")
 		}
 	}
 

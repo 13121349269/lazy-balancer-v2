@@ -864,7 +864,7 @@ func (s *CaddyService) getUpstreamHealthFromMetrics() map[string]bool {
 	lines := strings.Split(string(body), "\n")
 	for _, line := range lines {
 		if strings.HasPrefix(line, "caddy_reverse_proxy_upstreams_healthy{") || strings.HasPrefix(line, "caddy_layer4_proxy_upstream_healthy{") {
-			upstream := extractMetricLabel(line, "upstream")
+			upstream := ExtractMetricLabel(line, "upstream")
 			spaceIdx := strings.LastIndex(line, " ")
 			var isHealthy float64
 			if spaceIdx > 0 {
@@ -882,10 +882,11 @@ func (s *CaddyService) getUpstreamHealthFromMetrics() map[string]bool {
 	return result
 }
 
-// extractMetricLabel（LBS-A-2，第 70 轮 P4）：label 键必须以标签边界出现
-// （LB40-6 精确键匹配——与 handlers extractLabel 同型收敛）。裸子串匹配会把
-// peer_upstream 等前缀兄弟标签的值误归到目标 label。
-func extractMetricLabel(metricName string, label string) string {
+// ExtractMetricLabel（LBS-A-2，第 70 轮 P4；LBS/LBH-7 第 73 轮收敛为单源）：
+// label 键必须以标签边界出现（LB40-6 精确键匹配）。裸子串匹配会把
+// peer_upstream 等前缀兄弟标签的值误归到目标 label。handlers 侧同名叶函数
+// extractLabel 已删除并改调本函数（跨包唯一实现）。
+func ExtractMetricLabel(metricName string, label string) string {
 	start := -1
 	for _, boundary := range []string{"," + label + `="`, "{" + label + `="`} {
 		if idx := strings.Index(metricName, boundary); idx >= 0 {

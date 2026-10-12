@@ -213,7 +213,7 @@ func (h *Handlers) applyFromTxNote(c *gin.Context, tx *sql.Tx, reloadDetail stri
 		// 陈旧 caddy_apply_error 会导致横幅长亮）。
 		h.recordCaddyApplyResult(nil)
 		recordAudit(c, "重载", "Caddy服务", reloadDetail)
-		services.Logf("info", "保存链计时: apply_total=%dms（含渲染+CLI 校验+Caddy 重载）", time.Since(applyStart).Milliseconds())
+		services.Logf("info", "保存链计时: apply_total=%dms（含渲染+Caddy 重载）", time.Since(applyStart).Milliseconds())
 	}, nil
 }
 

@@ -85,17 +85,34 @@ func (h *Handlers) CreateCurrentUserAPIKey(c *gin.Context) {
 }
 
 func (h *Handlers) DeleteCurrentUserAPIKey(c *gin.Context) {
+	deleteAPIKey(c, int(contextUserID(c)))
+}
+
+func (h *Handlers) DeleteAPIKey(c *gin.Context) {
+	deleteAPIKey(c, 0)
+}
+
+// deleteAPIKey 删除 API 密钥（SYS-REST-F1 第 73 轮：DeleteAPIKey 与
+// DeleteCurrentUserAPIKey 30+ 行逐字重复，仅作用域差异收敛为单实现）。
+// scopedUserID>0 时限本人创建（WHERE created_by=?），0 时全局删除；其余
+// （审计留痕、白名单缓存清扫、响应文案）两入口完全同源。
+func deleteAPIKey(c *gin.Context, scopedUserID int) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "ID 参数无效"})
 		return
 	}
-	userID := int(contextUserID(c))
+	where := "id = ?"
+	args := []any{id}
+	if scopedUserID > 0 {
+		where += " AND created_by = ?"
+		args = append(args, scopedUserID)
+	}
 	var name string
-	if err := db.DB.QueryRow("SELECT name FROM api_keys WHERE id = ? AND created_by = ?", id, userID).Scan(&name); dbQueryNotFound(c, err, "API 密钥不存在", "DeleteCurrentUserAPIKey query key") {
+	if err := db.DB.QueryRow("SELECT name FROM api_keys WHERE "+where, args...).Scan(&name); dbQueryNotFound(c, err, "API 密钥不存在", "deleteAPIKey query key") {
 		return
 	}
-	result, err := db.DB.Exec("DELETE FROM api_keys WHERE id = ? AND created_by = ?", id, userID)
+	result, err := db.DB.Exec("DELETE FROM api_keys WHERE "+where, args...)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "删除 API 密钥失败"})
 		return
@@ -407,33 +424,4 @@ func encodeMCPIPWhitelist(whitelist []string) (string, error) {
 		return "", fmt.Errorf("marshal MCP IP whitelist: %w", err)
 	}
 	return string(data), nil
-}
-
-func (h *Handlers) DeleteAPIKey(c *gin.Context) {
-	id, err := strconv.Atoi(c.Param("id"))
-	if err != nil || id <= 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "ID 参数无效"})
-		return
-	}
-	var name string
-	if err := db.DB.QueryRow("SELECT name FROM api_keys WHERE id = ?", id).Scan(&name); dbQueryNotFound(c, err, "API 密钥不存在", "DeleteAPIKey query key") {
-		return
-	}
-	result, err := db.DB.Exec("DELETE FROM api_keys WHERE id = ?", id)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "删除 API 密钥失败"})
-		return
-	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "确认 API 密钥删除结果失败"})
-		return
-	}
-	if rows == 0 {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "API 密钥不存在"})
-		return
-	}
-	recordAudit(c, "删除", "API密钥", services.FormatAuditDetail(fmt.Sprintf("密钥 %d", id), name))
-	purgeAPIKeyWhitelistCache(id)
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "API 密钥已删除"})
 }

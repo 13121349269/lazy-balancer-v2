@@ -344,6 +344,16 @@ func (h *Handlers) AutoBackupSettings(c *gin.Context) {
 	if keep < 1 || keep > 30 {
 		keep = 7
 	}
+	// SYS-F1（第 73 轮 P5）：day 读侧按 frequency 钳制——与写侧校验同口径
+	//（UpdateAutoBackupSettings dayHigh：weekly 1-7、daily/monthly 1-28）。
+	// 越界存量值回退 1（DB 默认），与 keep 回退同格；合法值原样返回。
+	dayHigh := 28
+	if freq == "weekly" {
+		dayHigh = 7
+	}
+	if day < 1 || day > dayHigh {
+		day = 1
+	}
 	sections := []string{}
 	if sectionsRaw.Valid {
 		var stored []string

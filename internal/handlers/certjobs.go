@@ -406,12 +406,10 @@ func certJobRetryBlocked(status string, updatedAt sql.NullTime, now time.Time) (
 
 // reversedCertJobDomain 交换双域名任务的域名顺序：cert_jobs.domain 存排序
 // 规范形式，lb_rules.domain 保留用户输入顺序，匹配需同时覆盖两种排列。
+// LBH-6（第 73 轮 P5）：单源收敛至 services.ReversedCertJobDomain（与
+// rules.reversedACMEDomainForm 同实现，两侧委托）。
 func reversedCertJobDomain(domain string) string {
-	parts := strings.Split(domain, ",")
-	if len(parts) == 2 {
-		return parts[1] + "," + parts[0]
-	}
-	return domain
+	return services.ReversedCertJobDomain(domain)
 }
 
 // certJobDeleteGuard 返回该状态任务在关联规则仍处自动签发状态时是否受 409

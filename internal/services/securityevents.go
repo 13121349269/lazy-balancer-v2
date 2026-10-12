@@ -1486,7 +1486,7 @@ func runIngestionLoop(ctx context.Context) error {
 
 // —— 安全处理耗时侧车文件（2026-09-27 用户裁定）——
 // 跨进程通信:写侧在 Caddy 二进制(caddygeoip/blocked_counter 经
-// AppendSecurityTiming 追加「<id> <ms>」行),读侧在本进程(每 audit pass 前
+// AppendSecurityTiming 追加「<id> <us>」行),读侧在本进程(每 audit pass 前
 // securityTimingLoad 全量读入 tick 级 map);关联键=blocked_counter 注入请求头
 // X-Lb-Security-Timing-Id(coraza 审计日志 request.headers 天然收录)。
 // 生命周期:tick 级 map(pass 结束后下轮 Load 重建,旧条目自然丢弃);文件由
@@ -1521,11 +1521,11 @@ func securityTimingLoad() {
 		if line == "" {
 			continue
 		}
-		id, ms, ok := strings.Cut(line, " ")
+		id, us, ok := strings.Cut(line, " ")
 		if !ok || id == "" {
 			continue
 		}
-		v, err := strconv.ParseInt(ms, 10, 64)
+		v, err := strconv.ParseInt(us, 10, 64)
 		if err != nil || v < 0 {
 			continue
 		}
@@ -1610,8 +1610,3 @@ func securityEventsStageDuration(timingID, ruleID string) int64 {
 	}
 	return 0
 }
-
-// Stage1PrecheckIDSQLList 是预检段规则 ID 的 SQL 字面量清单——handlers 层
-// SQL 与本文件 Go 谓词(securityEventsIsPrecheckRule)共享同一事实源(第 62
-// 轮 F62-40 三处字面量收敛;3/5/12 为防御性包含——当前 nolog pass 不产事件)。
-const Stage1PrecheckIDSQLList = "('2','3','4','5','7','8','12','14')"

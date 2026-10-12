@@ -175,3 +175,50 @@ func TestReadRuleLogTail_windowEquivalenceShapes(t *testing.T) {
 		}
 	})
 }
+
+// LBS/LBH-3（第 73 轮）：ReadRuleLogFrom 遇整窗无换行（>8MB 单行/二进制/
+// 损坏日志）时旧式把 data 置 nil 使 next==offset 原地不动——调用方按返回
+// offset 轮询会永久卡死。钉两形状：无换行大文件每个「读满的窗口」必须前进
+// 一个窗口（未满窗残段仍扣留，等待写侧补全换行）；有换行文件交付完整行且
+// next 指向已消费末字节的既有语义不变。
+func TestReadRuleLogFrom_newlineFreeAdvancesWindow(t *testing.T) {
+	const maxRead = 8 << 20
+	// 3 个满窗 + 小于一窗的残段，整文件无换行（单条记录跨越读取窗口）。
+	size := int64(maxRead)*3 + 777
+	writeRuleLogFile(t, "advance", bytes.Repeat([]byte{0x41}, int(size)))
+
+	offset := int64(0)
+	for window := 1; window <= 3; window++ {
+		lines, next := ReadRuleLogFrom("advance", offset)
+		if len(lines) != 0 {
+			t.Fatalf("window %d: 无行边界窗口不得交付行, got %d", window, len(lines))
+		}
+		if next != offset+maxRead {
+			t.Fatalf("window %d: next=%d, want %d（整窗无换行须前进一个窗口）", window, next, offset+maxRead)
+		}
+		offset = next
+	}
+	// 残段（未满窗且无换行）：扣留——next 停在 offset，等待写侧补全换行。
+	lines, next := ReadRuleLogFrom("advance", offset)
+	if len(lines) != 0 {
+		t.Fatalf("残段不得交付行, got %d", len(lines))
+	}
+	if next != offset {
+		t.Fatalf("未满窗未终结残段应扣留: next=%d offset=%d", next, offset)
+	}
+	if offset+777 != size {
+		t.Fatalf("窗口推进未覆盖到残段起点: offset=%d size=%d", offset, size)
+	}
+}
+
+func TestReadRuleLogFrom_newlineFileDeliversCompleteLines(t *testing.T) {
+	writeRuleLogFile(t, "complete", []byte("a\nbb\nccc\npartial"))
+	lines, next := ReadRuleLogFrom("complete", 0)
+	if len(lines) != 3 || lines[0] != "a" || lines[1] != "bb" || lines[2] != "ccc" {
+		t.Fatalf("lines=%v, want [a bb ccc]（未终结尾行须扣留）", lines)
+	}
+	wantNext := int64(len("a\nbb\nccc\n"))
+	if next != wantNext {
+		t.Fatalf("next=%d, want %d（仅交付完整行）", next, wantNext)
+	}
+}

@@ -710,7 +710,7 @@ interface IP2RegionUpdateInfo { readonly status: string; readonly trigger: strin
 interface ThreatUpdateInfo { running: boolean; trigger: string; started_at: string; finished_at: string; outcome: string }
 
 const authStore = useAuthStore()
-const isSlaveNode = computed(() => authStore.nodeMode === 'slave')
+const isSlaveNode = computed(() => authStore.isSlaveNode)
 const isReadOnly = computed(() => authStore.readOnlyReason !== null)
 
 const users = ref<UserListItem[]>([])

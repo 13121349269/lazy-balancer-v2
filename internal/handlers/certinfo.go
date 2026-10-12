@@ -1,8 +1,6 @@
 package handlers
 
 import (
-	"crypto/x509"
-	"encoding/pem"
 	"fmt"
 	"net/http"
 	"strings"
@@ -14,12 +12,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
-
-type batchRuleCertInput struct {
-	id, certPEM, source, ruleDomains string
-	expiryDays                       int
-	now                              time.Time
-}
 
 // GetRuleCertInfo returns parsed certificate information for a single rule.
 func (h *Handlers) GetRuleCertInfo(c *gin.Context) {
@@ -130,66 +122,7 @@ func (h *Handlers) GetRulesCertInfo(c *gin.Context) {
 				}
 			}
 		}
-		result[id] = parseBatchRuleCertInfo(batchRuleCertInput{
-			id: id, certPEM: certPEM, source: rule.source, ruleDomains: rule.domains,
-			expiryDays: rule.expiryDays, now: now,
-		})
+		result[id] = services.FormatRuleCertInfo(certPEM, rule.source, rule.domains, id, rule.expiryDays, now)
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: result})
-}
-
-func parseBatchRuleCertInfo(input batchRuleCertInput) *models.RuleCertInfo {
-	info := &models.RuleCertInfo{CaddyID: input.id, Source: input.source, Domains: input.ruleDomains, Status: "unknown"}
-	if strings.TrimSpace(input.certPEM) == "" {
-		if input.source == "acme_dns" {
-			info.Error = "ACME 证书尚未签发或不存在"
-		} else {
-			info.Error = "证书不存在"
-		}
-		return info
-	}
-	block, _ := pem.Decode([]byte(input.certPEM))
-	if block == nil {
-		info.Error = "证书格式无效"
-		return info
-	}
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		info.Error = "证书解析失败: " + err.Error()
-		return info
-	}
-	domainSet := make(map[string]struct{}, len(cert.DNSNames)+1)
-	domains := make([]string, 0, len(cert.DNSNames)+1)
-	for _, domain := range append(cert.DNSNames, cert.Subject.CommonName) {
-		if domain != "" {
-			if _, exists := domainSet[domain]; !exists {
-				domainSet[domain] = struct{}{}
-				domains = append(domains, domain)
-			}
-		}
-	}
-	if len(domains) > 0 {
-		info.Domains = strings.Join(domains, ", ")
-	}
-	info.Issuer = cert.Issuer.CommonName
-	if len(cert.Issuer.Organization) > 0 && cert.Issuer.Organization[0] != "" {
-		info.Issuer = cert.Issuer.Organization[0]
-		if cert.Issuer.CommonName != "" {
-			info.Issuer += " (" + cert.Issuer.CommonName + ")"
-		}
-	}
-	if info.Issuer == "" {
-		info.Issuer = "-"
-	}
-	info.NotBefore = cert.NotBefore.Format("2006-01-02 15:04:05")
-	info.NotAfter = cert.NotAfter.Format("2006-01-02 15:04:05")
-	info.DaysRemaining = int(cert.NotAfter.Sub(input.now).Hours() / 24)
-	if !input.now.Before(cert.NotAfter) {
-		info.Status = "expired"
-	} else if info.DaysRemaining <= input.expiryDays {
-		info.Status = "expiring"
-	} else {
-		info.Status = "valid"
-	}
-	return info
 }

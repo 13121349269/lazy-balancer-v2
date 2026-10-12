@@ -21,6 +21,11 @@ func SelectRuleCertificate(candidates []CertificateCandidate, ruleDomains string
 
 // GetCertExpiryThreshold returns the configured cert expiry warning threshold in days.
 func GetCertExpiryThreshold() int {
+	// SVC-F2（第 73 轮）：同包多数配置读取 helper 有 db.DB==nil 守卫——
+	// 未初始化库回退默认值，不得 nil deref（当前不可达，防御性一致）。
+	if db.DB == nil {
+		return 30
+	}
 	var days int
 	err := db.DB.QueryRow("SELECT COALESCE(cert_expiry_days, 30) FROM global_config WHERE id = 1").Scan(&days)
 	if err != nil {
@@ -40,6 +45,10 @@ func GetCertExpiryThreshold() int {
 // 配置读取退化无任何可观测痕迹。2026-09-07 C2 核实：UI 输入 min=1，0/负值仅
 // API 直写/导入可达——按默认 30 天兜底（非「禁用续签」语义）。
 func GetCertRenewalDays() int {
+	// SVC-F2（第 73 轮）：未初始化库回退默认 30 天（同 GetCertExpiryThreshold）。
+	if db.DB == nil {
+		return 30
+	}
 	var days int
 	err := db.DB.QueryRow("SELECT COALESCE(cert_renewal_days, 30) FROM global_config WHERE id = 1").Scan(&days)
 	if err != nil {
@@ -54,6 +63,10 @@ func GetCertRenewalDays() int {
 
 // GetCertRenewalAttempts returns the configured max renewal attempts.
 func GetCertRenewalAttempts() int {
+	// SVC-F2（第 73 轮）：未初始化库回退默认 5 次（同 GetCertExpiryThreshold）。
+	if db.DB == nil {
+		return 5
+	}
 	var attempts int
 	err := db.DB.QueryRow("SELECT COALESCE(cert_renewal_attempts, 5) FROM global_config WHERE id = 1").Scan(&attempts)
 	if err != nil {
@@ -66,16 +79,26 @@ func GetCertRenewalAttempts() int {
 	return attempts
 }
 
-// ParseCertInfo parses a PEM certificate and returns structured display info.
-func ParseCertInfo(certPEM, source, ruleDomains string) *models.RuleCertInfo {
+// FormatRuleCertInfo 从 PEM 证书内容生成展示用 RuleCertInfo——批量
+// (handlers.GetRulesCertInfo)与单规则(ParseCertInfo)两路径同用（R73 LBH-F7
+// 收敛：原 handlers.parseBatchRuleCertInfo 与本文件 ParseCertInfo 两份实现历史
+// 三度分叉）。参数显式化：expiryDays=expiring 阈值天数、now=判定基准（批量取
+// 统一快照，避免逐规则 time.Now 漂移）；caddyID 非空时回填。source=acme_dns 且
+// PEM 为空时给出 ACME 专属「尚未签发」文案（其余来源「证书不存在」）。
+func FormatRuleCertInfo(certPEM, source, ruleDomains, caddyID string, expiryDays int, now time.Time) *models.RuleCertInfo {
 	info := &models.RuleCertInfo{
+		CaddyID: caddyID,
 		Source:  source,
 		Domains: ruleDomains,
 		Status:  "unknown",
 	}
 
 	if strings.TrimSpace(certPEM) == "" {
-		info.Error = "证书不存在"
+		if source == "acme_dns" {
+			info.Error = "ACME 证书尚未签发或不存在"
+		} else {
+			info.Error = "证书不存在"
+		}
 		return info
 	}
 
@@ -91,28 +114,24 @@ func ParseCertInfo(certPEM, source, ruleDomains string) *models.RuleCertInfo {
 		return info
 	}
 
-	// Domains: prefer certificate DNSNames, fallback to CommonName, fallback to rule domain
-	domainSet := make(map[string]struct{})
-	var parsedDomains []string
-	for _, name := range cert.DNSNames {
-		if name != "" {
-			if _, exists := domainSet[name]; !exists {
-				domainSet[name] = struct{}{}
-				parsedDomains = append(parsedDomains, name)
-			}
+	// Domains：证书 DNSNames 优先，CommonName 兜底，去重后均无则保留 ruleDomains
+	domainSet := make(map[string]struct{}, len(cert.DNSNames)+1)
+	parsedDomains := make([]string, 0, len(cert.DNSNames)+1)
+	for _, name := range append(cert.DNSNames, cert.Subject.CommonName) {
+		if name == "" {
+			continue
 		}
-	}
-	if cert.Subject.CommonName != "" {
-		if _, exists := domainSet[cert.Subject.CommonName]; !exists {
-			domainSet[cert.Subject.CommonName] = struct{}{}
-			parsedDomains = append(parsedDomains, cert.Subject.CommonName)
+		if _, exists := domainSet[name]; exists {
+			continue
 		}
+		domainSet[name] = struct{}{}
+		parsedDomains = append(parsedDomains, name)
 	}
 	if len(parsedDomains) > 0 {
 		info.Domains = strings.Join(parsedDomains, ", ")
 	}
 
-	// Issuer: prefer Organization, fallback to CommonName
+	// Issuer：Organization 优先，CommonName 兜底
 	issuer := cert.Issuer.CommonName
 	if len(cert.Issuer.Organization) > 0 && cert.Issuer.Organization[0] != "" {
 		issuer = cert.Issuer.Organization[0]
@@ -128,20 +147,25 @@ func ParseCertInfo(certPEM, source, ruleDomains string) *models.RuleCertInfo {
 	const timeFmt = "2006-01-02 15:04:05"
 	info.NotBefore = cert.NotBefore.Format(timeFmt)
 	info.NotAfter = cert.NotAfter.Format(timeFmt)
+	info.DaysRemaining = int(cert.NotAfter.Sub(now).Hours() / 24)
 
-	now := time.Now()
-	daysRemaining := int(cert.NotAfter.Sub(now).Hours() / 24)
-	info.DaysRemaining = daysRemaining
-
-	if !now.Before(cert.NotAfter) {
+	switch {
+	case !now.Before(cert.NotAfter):
 		info.Status = "expired"
-	} else if daysRemaining <= GetCertExpiryThreshold() {
+	case info.DaysRemaining <= expiryDays:
 		info.Status = "expiring"
-	} else {
+	default:
 		info.Status = "valid"
 	}
 
 	return info
+}
+
+// ParseCertInfo parses a PEM certificate and returns structured display info.
+// 阈值取配置值(cert_expiry_days)、基准取当前时刻——批量路径改用
+// FormatRuleCertInfo 显式传参（同一实现）。
+func ParseCertInfo(certPEM, source, ruleDomains string) *models.RuleCertInfo {
+	return FormatRuleCertInfo(certPEM, source, ruleDomains, "", GetCertExpiryThreshold(), time.Now())
 }
 
 // GetRuleCertInfo returns parsed certificate info for a single rule.

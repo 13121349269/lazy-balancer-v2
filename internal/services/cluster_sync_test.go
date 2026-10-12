@@ -1402,7 +1402,7 @@ func TestSyncService_Pull_convergesVersionTagOnlyWafDrift(t *testing.T) {
 	if got, err := os.ReadFile(ip2regionLivePath + ".version"); err != nil || strings.TrimSpace(string(got)) != "v3.17.0audit" {
 		t.Fatalf("version tag not converged: content=%q err=%v", got, err)
 	}
-	if service.wafFilesDrifted() {
+	if service.wafFilesDrifted(context.Background()) {
 		t.Fatal("wafFilesDrifted still true after convergence")
 	}
 
@@ -1430,7 +1430,7 @@ func TestSyncService_Pull_convergesVersionTagOnlyWafDrift(t *testing.T) {
 	if got, err := os.ReadFile(ip2regionLivePath + ".version"); err != nil || strings.TrimSpace(string(got)) != "v3.17.0audit" {
 		t.Fatalf("version tag regressed: content=%q err=%v", got, err)
 	}
-	if service.wafFilesDrifted() {
+	if service.wafFilesDrifted(context.Background()) {
 		t.Fatal("wafFilesDrifted true after loop termination")
 	}
 }
@@ -1958,7 +1958,7 @@ func TestWafFilesDrifted_nullRefAppliedHashExempt(t *testing.T) {
 	os.WriteFile(filepath.Join(crsLiveDir, "rules", "a.conf"), []byte("residual"), 0644)
 
 	service := NewSyncService(database, &config.Config{DataDir: t.TempDir()}, nil)
-	if service.wafFilesDrifted() {
+	if service.wafFilesDrifted(context.Background()) {
 		t.Fatal("null-ref applied hash must be exempt (master has no files; slave residuals must not loop)")
 	}
 }

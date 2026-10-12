@@ -1,14 +1,21 @@
 package handlers
 
 import (
+	"context"
+	"database/sql"
+	"database/sql/driver"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/gin-gonic/gin"
 
+	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/services"
 )
 
@@ -141,5 +148,240 @@ func TestBulkUpdatePolicyBindings_enforcesSizeLimit(t *testing.T) {
 	})
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("101 entries: status=%d, want 400", recorder.Code)
+	}
+}
+
+func seedPolicyWithType(t *testing.T, id int, name, policyType string) {
+	t.Helper()
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,mode,policy_type,enabled) VALUES (?,?,?,?,1)`, id, name, "off", policyType); err != nil {
+		t.Fatalf("seed policy %d: %v", id, err)
+	}
+}
+
+func seedBinding(t *testing.T, caddyID string, policyID int) {
+	t.Helper()
+	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES (?,?)`, caddyID, policyID); err != nil {
+		t.Fatalf("seed binding %s→%d: %v", caddyID, policyID, err)
+	}
+}
+
+// NEW-1(a)：bind 侧 maxBindingsPerRule 门——规则现有绑定数（不含本策略）≥8 时
+// 再 bind 新策略 → 400，且不写入、零重载（与单条 bind / batch-bind 端点同源）。
+func TestBulkUpdatePolicyBindings_enforcesRuleBindingLimit(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router, loads := newBulkBindingsRouter(t)
+	seedHTTPRule(t, "lb_bulk_cap")
+	for id := 1; id <= 8; id++ {
+		seedPolicyWithType(t, id, fmt.Sprintf("cap-%d", id), "stage3")
+		seedBinding(t, "lb_bulk_cap", id)
+	}
+	seedPolicyWithType(t, 9, "cap-target", "stage3")
+	baseline := loads.Load()
+
+	recorder := postJSON(t, router, "/security/policies/9/bindings/bulk", map[string]any{
+		"bind":   []string{"lb_bulk_cap"},
+		"unbind": []string{},
+	})
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400（已达 8 条上限）", recorder.Code, recorder.Body.String())
+	}
+	assertIDSlice(t, queryBoundPolicyIDs(t, "lb_bulk_cap"), []int{1, 2, 3, 4, 5, 6, 7, 8})
+	if n := loads.Load() - baseline; n != 0 {
+		t.Fatalf("rejected bulk must not reload caddy, got %d extra loads", n)
+	}
+}
+
+// NEW-1(b)：bind 侧 stage2 唯一门——本策略为 stage2 且该规则已绑其他 stage2 →
+// 400；同规则绑 stage3 策略仍放行（门只针对限流叠加）。
+func TestBulkUpdatePolicyBindings_rejectsSecondStage2Binding(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router, _ := newBulkBindingsRouter(t)
+	seedHTTPRule(t, "lb_bulk_rl")
+	seedPolicyWithType(t, 10, "rl-a", "stage2")
+	seedPolicyWithType(t, 11, "rl-b", "stage2")
+	seedPolicyWithType(t, 12, "waf-a", "stage3")
+	seedBinding(t, "lb_bulk_rl", 10)
+
+	recorder := postJSON(t, router, "/security/policies/11/bindings/bulk", map[string]any{
+		"bind":   []string{"lb_bulk_rl"},
+		"unbind": []string{},
+	})
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("bind second stage2: status=%d body=%s, want 400", recorder.Code, recorder.Body.String())
+	}
+	assertIDSlice(t, queryBoundPolicyIDs(t, "lb_bulk_rl"), []int{10})
+
+	// 回归：已有 stage2 时绑 stage3 策略照常放行（门不误伤非限流策略）。
+	recorder = postJSON(t, router, "/security/policies/12/bindings/bulk", map[string]any{
+		"bind":   []string{"lb_bulk_rl"},
+		"unbind": []string{},
+	})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("bind stage3 alongside stage2: status=%d body=%s, want 200", recorder.Code, recorder.Body.String())
+	}
+	assertIDSlice(t, queryBoundPolicyIDs(t, "lb_bulk_rl"), []int{10, 12})
+}
+
+// NEW-3：bind/unbind 规则 id 归一（TrimSpace）——带空白 id 按去空白后处理，
+// 不得因首尾空白被判「规则不存在」。
+func TestBulkUpdatePolicyBindings_trimsRuleIDs(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router, _ := newBulkBindingsRouter(t)
+	seedHTTPRule(t, "lb_bulk_trim")
+	policy := createMultiPolicy(t, router, "trim-p")
+
+	recorder := postJSON(t, router, fmt.Sprintf("/security/policies/%d/bindings/bulk", policy), map[string]any{
+		"bind":   []string{"  lb_bulk_trim  "},
+		"unbind": []string{},
+	})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200（id 应去空白后绑定）", recorder.Code, recorder.Body.String())
+	}
+	assertIDSlice(t, queryBoundPolicyIDs(t, "lb_bulk_trim"), []int{policy})
+}
+
+// F2（第 73 轮）：bulk unbind 精确删除本策略绑定，不触碰兄弟绑定——DELETE 若
+// 漏掉 AND policy_id=? 会被本用例拦住。
+func TestBulkUpdatePolicyBindings_unbindKeepsSiblingBindings(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router, _ := newBulkBindingsRouter(t)
+	seedHTTPRule(t, "lb_bulk_sib")
+	seedPolicyWithType(t, 20, "sib-a", "stage3")
+	seedPolicyWithType(t, 21, "sib-b", "stage3")
+	seedBinding(t, "lb_bulk_sib", 20)
+	seedBinding(t, "lb_bulk_sib", 21)
+
+	recorder := postJSON(t, router, "/security/policies/20/bindings/bulk", map[string]any{
+		"bind":   []string{},
+		"unbind": []string{"lb_bulk_sib"},
+	})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", recorder.Code, recorder.Body.String())
+	}
+	assertIDSlice(t, queryBoundPolicyIDs(t, "lb_bulk_sib"), []int{21})
+}
+
+// F3（第 73 轮）：同一规则同时出现在 bind 与 unbind → 400（语义冲突，早于写入）。
+func TestBulkUpdatePolicyBindings_rejectsBindUnbindConflict(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router, loads := newBulkBindingsRouter(t)
+	seedHTTPRule(t, "lb_bulk_clash")
+	seedPolicyWithType(t, 30, "clash-p", "stage3")
+	baseline := loads.Load()
+
+	recorder := postJSON(t, router, "/security/policies/30/bindings/bulk", map[string]any{
+		"bind":   []string{"lb_bulk_clash"},
+		"unbind": []string{"lb_bulk_clash"},
+	})
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", recorder.Code, recorder.Body.String())
+	}
+	assertIDSlice(t, queryBoundPolicyIDs(t, "lb_bulk_clash"), nil)
+	if n := loads.Load() - baseline; n != 0 {
+		t.Fatalf("conflict must not reload caddy, got %d extra loads", n)
+	}
+}
+
+// bindingWriteErrConnector：注入绑定写路径的规则查询故障——策略/绑定前置查询
+// 成功，规则查询即失败（第 73 轮 NEW-2：DB 错误须映射 500，而非 400 裸串外泄）。
+type bindingWriteErrConnector struct{}
+
+func (bindingWriteErrConnector) Connect(context.Context) (driver.Conn, error) {
+	return bindingWriteErrConn{}, nil
+}
+
+func (bindingWriteErrConnector) Driver() driver.Driver { return bindingWriteErrDriver{} }
+
+type bindingWriteErrDriver struct{}
+
+func (bindingWriteErrDriver) Open(string) (driver.Conn, error) { return bindingWriteErrConn{}, nil }
+
+type bindingWriteErrConn struct{}
+
+func (bindingWriteErrConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("unexpected prepare")
+}
+func (bindingWriteErrConn) Close() error              { return nil }
+func (bindingWriteErrConn) Begin() (driver.Tx, error) { return bindingWriteErrTx{}, nil }
+
+func (bindingWriteErrConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
+	switch {
+	case strings.Contains(query, "COALESCE(SUM(policy_type='mixed')"):
+		return &bindingWriteErrRows{cols: []string{"c", "m"}, rows: [][]driver.Value{{int64(1), int64(0)}}}, nil
+	case strings.Contains(query, "COALESCE(MAX(policy_type)"):
+		return &bindingWriteErrRows{cols: []string{"c", "t"}, rows: [][]driver.Value{{int64(1), "stage3"}}}, nil
+	case strings.Contains(query, "policy_type='mixed'"):
+		return &bindingWriteErrRows{cols: []string{"c"}, rows: [][]driver.Value{{int64(0)}}}, nil
+	case strings.Contains(query, "GROUP BY rule_caddy_id"):
+		return &bindingWriteErrRows{cols: []string{"r", "c"}}, nil
+	case strings.Contains(query, "SELECT COUNT(*), COALESCE(MAX(protocol)"):
+		return nil, errors.New("注入的规则查询失败")
+	default:
+		return nil, fmt.Errorf("unexpected query: %s", query)
+	}
+}
+
+type bindingWriteErrTx struct{}
+
+func (bindingWriteErrTx) Commit() error   { return nil }
+func (bindingWriteErrTx) Rollback() error { return nil }
+
+type bindingWriteErrRows struct {
+	cols []string
+	rows [][]driver.Value
+}
+
+func (r *bindingWriteErrRows) Columns() []string { return r.cols }
+func (r *bindingWriteErrRows) Close() error      { return nil }
+
+func (r *bindingWriteErrRows) Next(dest []driver.Value) error {
+	if len(r.rows) == 0 {
+		return io.EOF
+	}
+	copy(dest, r.rows[0])
+	r.rows = r.rows[1:]
+	return nil
+}
+
+// NEW-2（bulk applyOne）：规则查询 DB 故障 → 500「读取/写入策略绑定失败」，
+// 而非把裸错误串当 400 校验失败外泄。
+func TestBulkUpdatePolicyBindings_dbErrorReturns500(t *testing.T) {
+	orig := db.DB
+	db.DB = sql.OpenDB(bindingWriteErrConnector{})
+	t.Cleanup(func() { _ = db.DB.Close(); db.DB = orig })
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/security/policies/:id/bindings/bulk", (&Handlers{}).BulkUpdatePolicyBindings)
+
+	recorder := postJSON(t, router, "/security/policies/7/bindings/bulk", map[string]any{
+		"bind":   []string{"lb_x"},
+		"unbind": []string{},
+	})
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s, want 500", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "读取/写入策略绑定失败") {
+		t.Fatalf("body=%s, want 读取/写入策略绑定失败", recorder.Body.String())
+	}
+}
+
+// NEW-2（setRulePoliciesInTx）：规则查询 DB 故障 → 500「读取/写入策略绑定失败」。
+func TestSetRuleSecurityPolicies_dbErrorReturns500(t *testing.T) {
+	orig := db.DB
+	db.DB = sql.OpenDB(bindingWriteErrConnector{})
+	t.Cleanup(func() { _ = db.DB.Close(); db.DB = orig })
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.PUT("/security/rules/:caddy_id/policies", (&Handlers{}).SetRuleSecurityPolicies)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPut, "/security/rules/lb_x/policies", strings.NewReader(`{"policy_ids":[1]}`))
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s, want 500", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "读取/写入策略绑定失败") {
+		t.Fatalf("body=%s, want 读取/写入策略绑定失败", recorder.Body.String())
 	}
 }

@@ -762,6 +762,19 @@ func CanonicalACMEDomains(domains string) (string, error) {
 	return strings.Join(list, ","), nil
 }
 
+// ReversedCertJobDomain 返回双域名集合的逆序形式（"a.com,www.a.com"→
+// "www.a.com,a.com"）；非双元素集（单域名/多段/空）原样返回。cert_jobs.domain
+// 存排序规范形式，而 lb_rules.domain 保留用户输入顺序，任务匹配需同时覆盖两种
+// 排列（lower+replace 归一后按 IN (canonical, reversed) 命中）。
+// LBH-6（第 73 轮 P5）：handlers.rules.reversedACMEDomainForm 与
+// handlers.certjobs.reversedCertJobDomain 双份同实现收敛至此唯一源，两侧委托。
+func ReversedCertJobDomain(domain string) string {
+	if parts := strings.Split(domain, ","); len(parts) == 2 {
+		return parts[1] + "," + parts[0]
+	}
+	return domain
+}
+
 // normalizeAndValidateDomains returns a cleaned domain list if it is either
 // a single domain or a root domain plus its www subdomain. Otherwise nil.
 func normalizeAndValidateDomains(domains string) []string {

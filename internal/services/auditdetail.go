@@ -2,59 +2,48 @@ package services
 
 import "fmt"
 
+// auditResultTextMap 是审计结果码 → 中文渲染的唯一事实源（SVC-F1 第 73 轮：
+// 由 switch 改为 map，供 audit_result_text_test.go 以 AST/字面量互检钉住
+// 「AuditResultPart 字面量实参集合 ⊆ 映射键集」——新增结果码漏映射即测试红）。
+// 未收录码在 AuditResultText 中原样返回（保留英文兜底），但落库前应补映射。
+var auditResultTextMap = map[string]string{
+	"success":              "成功",
+	"failed":               "失败",
+	"failure":              "失败",
+	"partial":              "部分成功",
+	"max_attempts":         "达到最大重试次数",
+	"missing_material":     "证书数据缺失",
+	"queued":               "已重新排队",
+	"requested":            "已触发",
+	"invalid_request":      "请求格式错误",
+	"invalid_credentials":  "用户名或密码错误",
+	"credentials_invalid":  "凭证无效",
+	"internal_error":       "系统内部错误",
+	"enabled":              "已启用",
+	"disabled":             "已禁用",
+	"approved":             "已通过",
+	"rejected":             "已拒绝",
+	"created":              "已创建",
+	"reregistered":         "已重新注册",
+	"not_found":            "对象不存在",
+	"missing_domain":       "缺少测试域名",
+	"unknown_provider":     "未知提供商",
+	"provider_error":       "提供商错误",
+	"missing_acme_email":   "缺少 ACME 邮箱",
+	"invalid_config":       "配置无效",
+	"register_failed":      "注册失败",
+	"storage_corrupted":    "存储数据损坏",
+	"applied_or_no_change": "同步完成或无变更",
+	"sync_failed":          "同步失败",
+	"io_error":             "文件写入失败",
+	"query_failed":         "查询失败",
+}
+
 func AuditResultText(result string) string {
-	switch result {
-	case "success":
-		return "成功"
-	case "failed":
-		return "失败"
-	case "partial":
-		return "部分成功"
-	case "max_attempts":
-		return "达到最大重试次数"
-	case "missing_material":
-		return "证书数据缺失"
-	case "queued":
-		return "已重新排队"
-	case "requested":
-		return "已触发"
-	case "invalid_request":
-		return "请求格式错误"
-	case "invalid_credentials":
-		return "用户名或密码错误"
-	case "credentials_invalid":
-		return "凭证无效"
-	case "internal_error":
-		return "系统内部错误"
-	case "enabled":
-		return "已启用"
-	case "disabled":
-		return "已禁用"
-	case "approved":
-		return "已通过"
-	case "rejected":
-		return "已拒绝"
-	case "created":
-		return "已创建"
-	case "reregistered":
-		return "已重新注册"
-	case "not_found":
-		return "对象不存在"
-	case "missing_domain":
-		return "缺少测试域名"
-	case "unknown_provider":
-		return "未知提供商"
-	case "applied_or_no_change":
-		return "同步完成或无变更"
-	case "sync_failed":
-		return "同步失败"
-	case "io_error":
-		return "文件写入失败"
-	case "query_failed":
-		return "查询失败"
-	default:
-		return result
+	if text, ok := auditResultTextMap[result]; ok {
+		return text
 	}
+	return result
 }
 
 func FormatAuditDetail(parts ...string) string {

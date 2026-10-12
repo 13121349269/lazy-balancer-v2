@@ -12,7 +12,7 @@
 | internal/middleware/cluster_version.go | 156 | 版本触发器安装 + 同步写识别 |
 | internal/middleware/readonly.go | 78 | 从节点/非管理员写闸 |
 | internal/models/cluster.go | 406 | 集群数据模型与 wire 契约 |
-| docs/cluster-sync-assessment.zh-CN.md | 107 | 2026-08-11 历史评估（复核对象） |
+| docs/archive/cluster-sync-assessment.zh-CN.md | 107 | 2026-08-11 历史评估（复核对象） |
 | docker-compose.yml | 51 | 主从测试编排 |
 | web/src/views/settings/ClusterSettings.vue（699）及 settings/cluster/ 下 5 个组件 | 1445 | 前端集群 UI |
 
@@ -67,7 +67,7 @@ business 组：PATCH /users/me、MFA 自助、自助 API 密钥在从节点 403�
 
 ---
 
-## 二、旧评估复核（docs/cluster-sync-assessment.zh-CN.md，2026-08-11）
+## 二、旧评估复核（docs/archive/cluster-sync-assessment.zh-CN.md，2026-08-11）
 
 文档头部已声明「历史评估稿，结论不适用于当前版本」。逐条核对现状：
 

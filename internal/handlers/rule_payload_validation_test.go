@@ -2,7 +2,7 @@ package handlers
 
 // LB40-5/LB40-6(第 40 轮):host_header 字符校验(CRLF/控制字符注入
 // reverse_proxy 头部)、dns_server 形状校验(空 host/非数字端口)、
-// extractLabel 精确键匹配(x_host 不得误归集 host)。
+// services.ExtractMetricLabel 精确键匹配(x_host 不得误归集 host)。
 
 import (
 	"net/http"
@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+
+	"lazy-balancer-v2/internal/services"
 )
 
 func TestRulePayload_hostHeaderAndDnsServerValidation(t *testing.T) {
@@ -51,16 +53,16 @@ func TestRulePayload_hostHeaderAndDnsServerValidation(t *testing.T) {
 
 func TestExtractLabel_exactKeyMatch(t *testing.T) {
 	// x_host 不得被 host 子串匹配误归集
-	if got := extractLabel(`caddy_http_requests_total{x_host="evil"}`, "host"); got != "" {
+	if got := services.ExtractMetricLabel(`caddy_http_requests_total{x_host="evil"}`, "host"); got != "" {
 		t.Fatalf("host label must not match x_host, got %q", got)
 	}
-	if got := extractLabel(`caddy_http_requests_total{x_host="evil",host="real"}`, "host"); got != "real" {
+	if got := services.ExtractMetricLabel(`caddy_http_requests_total{x_host="evil",host="real"}`, "host"); got != "real" {
 		t.Fatalf("host label must match exact key, got %q", got)
 	}
-	if got := extractLabel(`caddy_http_requests_total{host="first",x_host="evil"}`, "host"); got != "first" {
+	if got := services.ExtractMetricLabel(`caddy_http_requests_total{host="first",x_host="evil"}`, "host"); got != "first" {
 		t.Fatalf("leading host label must match, got %q", got)
 	}
-	if got := extractLabel(`caddy_http_requests_total{x_host="evil"}`, "x_host"); got != "evil" {
+	if got := services.ExtractMetricLabel(`caddy_http_requests_total{x_host="evil"}`, "x_host"); got != "evil" {
 		t.Fatalf("x_host label must match its own key, got %q", got)
 	}
 }

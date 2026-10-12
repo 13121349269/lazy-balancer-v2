@@ -310,8 +310,15 @@ func validateRuleFeatures(input ruleFeatureInput) error {
 	}
 	// 重试窗口值域（方案 C，2026-10-12）：http 规则 tcp_try_duration ∈ [-1,60000]
 	// （-1=显式禁用重试，NTLM 接管态）；tcp 规则 ∈ [0,60000]（下方 TCP 分支拒负值）。
+	// LBH-1（第 73 轮 P4）：上界两协议两字段同值 60000——此前 http 侧
+	// tcp_try_interval、tcp 侧 duration/interval 均无 >60000 上界，越界值
+	//（999999ms/10^12ms）可经 API/MCP/导入/集群快照落库渲染（L4 proxy
+	// try_duration 溢出，注释宣称值域未兑现）。
 	if input.Protocol == "http" && (input.TCPTryDuration < -1 || input.TCPTryDuration > 60000) {
 		return fmt.Errorf("重试窗口必须在 -1 到 60000 毫秒之间（-1=禁用重试，0=默认 5 秒窗口）")
+	}
+	if input.Protocol == "http" && input.TCPTryInterval > 60000 {
+		return fmt.Errorf("重试间隔必须在 0 到 60000 毫秒之间")
 	}
 	if input.NTLMCompatible == 1 {
 		if input.Protocol == "tcp" {
@@ -389,6 +396,11 @@ func validateRuleFeatures(input ruleFeatureInput) error {
 		// 保存前拒绝显式负值。proxy_flush_interval 的 -1 哨兵仅属 http 侧,不适用此处。
 		if input.TCPHealthCheckPort < 0 || input.TCPTryDuration < 0 || input.TCPTryInterval < 0 {
 			return fmt.Errorf("TCP 健康检查端口与重试时长/间隔不能为负数")
+		}
+		// LBH-1（第 73 轮 P4）：TCP 重试窗口补上界——[0,60000]（与 http 侧
+		// 上界同值），此前仅拒负值，越界值落库渲染溢出。
+		if input.TCPTryDuration > 60000 || input.TCPTryInterval > 60000 {
+			return fmt.Errorf("TCP 重试时长/间隔必须在 0 到 60000 毫秒之间")
 		}
 	}
 	if !input.CustomRoutesEnabled && len(input.PathRules) > 0 {

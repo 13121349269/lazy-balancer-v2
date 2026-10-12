@@ -44,6 +44,12 @@ fi
 #   • 不存在=崩溃,1s 重启;连续 ≥5 次退避 30s 后重置计数(再给机会)
 #   • startCaddy handler 删 pause 后监督器 ≤1s 检测并启动(等待环 1s 粒度)
 #   • 容器 stop:PID1(lazy-balancer)退出 → 容器 teardown 杀全部进程(含监督器)
+# INFRA-5（第 73 轮）：监督器 pid 标记同为「容器运行期」残留——docker stop/start、
+# restart 复用同一可写层，上一生命周期的标记留存，新标记（下方父壳写入）落盘前
+# 若被 supervisorAlive 读到即陈旧误判。父壳侧、后台化监督器之前清除；不可放进
+# 子壳：子壳内清除会与下方父壳 `echo $!` 写入竞态（实测 300/300 子壳 rm 恒晚于
+# 父壳写），误删刚写入的在位标记 → 永久失标（LBH-B-N2 回归）。
+rm -f /tmp/lazy-balancer-caddy-supervisor.pid
 (
   # set +e: 监督器必须扛住 Caddy 的非零退出(被杀/崩溃)——外层 set -e 会在
   # caddy run 返回非零时杀死监督器本身(实测:kill -9 后监督器变僵尸不自愈)

@@ -70,7 +70,17 @@ func ReadRuleLogFrom(ruleID string, offset int64) (lines []string, next int64) {
 		// string(data) 整体复制（尾行未终结时每 5s 轮询各命中一次）。
 		if i := bytes.LastIndexByte(data, '\n'); i >= 0 {
 			data = data[:i+1]
+		} else if int64(len(data)) >= maxRead {
+			// LBS/LBH-3（第 73 轮）：整窗读满（达 maxRead）仍无换行——单条
+			// 记录超过读取窗口（>8MB 单行/二进制/损坏日志）。旧式 data=nil 使
+			// next==offset 原地不动，日志流永久卡死。至少前进一个窗口：丢弃
+			// 本窗字节并把 next 推到窗口末，后续轮询从新 offset 继续。
+			next = offset + int64(len(data))
+			return nil, next
 		} else {
+			// 未满窗且无换行（文件/记录暂未终结）：保持扣留语义——data 置空、
+			// next 停在 offset，待写侧补全换行后下轮交付完整行（访问日志逐行
+			// 落盘的正常中间态）。
 			data = nil
 		}
 	}

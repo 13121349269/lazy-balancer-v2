@@ -732,7 +732,7 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 					if failures == wafRepullMaxFailures {
 						Logf("error", "同步应用后 Caddy 重载持续失败（已连续 %d 轮），补偿全量重拉降频为每 %d 轮一次", wafRepullMaxFailures, wafRepullEvery)
 					}
-					if failures > wafRepullMaxFailures && failures%wafRepullEvery != 0 {
+					if !backoffDue(failures) {
 						// 降频期：本轮跳过补偿重拉，走 304 返回（marker 保持可见）。
 					} else {
 						Logf("warn", "检测到上次同步应用后 Caddy 重载失败（%s），全量重拉补偿重试", lastSyncErr)
@@ -756,7 +756,7 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 			// 显式比对，否则从节点安全数据随主节点配置静默永久分叉。兜底重拉
 			// 带连续失败计数（F-1）：持续失败时上表面到 last_sync_error 并把
 			// 重拉降频，避免每 60s 无限循环打主从负载。
-			if s.wafFilesDrifted() {
+			if s.wafFilesDrifted(ctx) {
 				failures := s.wafRepullFailures.Add(1)
 				if failures == wafRepullMaxFailures {
 					Logf("error", "安全数据持续同步失败（已连续 %d 轮未收敛；若主节点本就无该组件数据则属预期形态，从节点残留文件不会被同步删除——CL9-N3），兜底全量重拉降频为每 %d 轮一次", wafRepullMaxFailures, wafRepullEvery)
@@ -854,7 +854,7 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 	s.pullApplyMu.Unlock()
 	// 每次成功应用后核对 WAF 文件态：已收敛则清零连续失败计数，恢复正常的
 	// 兜底重拉频率与 last_sync_error 语义。
-	s.trackWafRepullConvergence()
+	s.trackWafRepullConvergence(ctx)
 	s.trackReloadRepullConvergence(ctx)
 	return SyncResult{AppliedVersion: snapshot.Version, Changed: true}, nil
 }
@@ -878,7 +878,7 @@ func (s *SyncService) driftedSections(ctx context.Context) string {
 		return ""
 	}
 	applied := readAppliedSectionHashes(s.db)
-	switches, err := readSyncSwitches(s.db)
+	switches, err := readSyncSwitches(ctx, s.db)
 	if err != nil {
 		switches = SyncSwitches{Users: true, Rules: true, Security: true}
 	}
@@ -902,11 +902,17 @@ const wafRepullMaxFailures = 5
 // wafRepullEvery 是持续失败期兜底重拉的降频周期（以同步轮为单位）。
 const wafRepullEvery = 10
 
-// wafRepullDue 判定本轮 304 是否执行 WAF 文件兜底全量重拉：连续未收敛
-// 达到 wafRepullMaxFailures 后降频为每 wafRepullEvery 轮一次。
-func (s *SyncService) wafRepullDue() bool {
-	failures := s.wafRepullFailures.Load()
+// backoffDue（LBS/LBH-8 第 73 轮）判定连续失败计数下本轮是否应执行重拉：
+// 未达 wafRepullMaxFailures 时恒执行；达到后降频为每 wafRepullEvery 轮一次。
+// WAF 兜底重拉（wafRepullDue）与 304 补偿重拉两处降频共用本单源判定。
+func backoffDue(failures int32) bool {
 	return failures <= wafRepullMaxFailures || failures%wafRepullEvery == 0
+}
+
+// wafRepullDue 判定本轮 304 是否执行 WAF 文件兜底全量重拉：降频口径见
+// backoffDue。
+func (s *SyncService) wafRepullDue() bool {
+	return backoffDue(s.wafRepullFailures.Load())
 }
 
 // wafRepullPersistentlyFailed 报告 WAF 兜底重拉是否已连续失败达到阈值。
@@ -917,8 +923,8 @@ func (s *SyncService) wafRepullPersistentlyFailed() bool {
 // trackWafRepullConvergence 在快照成功应用后核对 WAF 文件态：已收敛则清零
 // 连续失败计数，恢复正常兜底重拉频率与 last_sync_error 语义。仅 Pull 的
 // pullMu 临界区内调用。
-func (s *SyncService) trackWafRepullConvergence() {
-	if !s.wafFilesDrifted() {
+func (s *SyncService) trackWafRepullConvergence(ctx context.Context) {
+	if !s.wafFilesDrifted(ctx) {
 		s.wafRepullFailures.Store(0)
 	}
 }
@@ -973,11 +979,11 @@ func wafFilesSectionHash(ref *models.ClusterWafFilesRef) (string, error) {
 // 「曾同步→开关关闭→本地改动」死循环)——文件态随安全防护开关:security
 // 关闭时文件与版本行均不受同步管辖,UI 版本显示与磁盘文件一致性由开关
 // 打开后的差分重放收敛。
-func (s *SyncService) wafFilesDrifted() bool {
+func (s *SyncService) wafFilesDrifted(ctx context.Context) bool {
 	if s.db == nil {
 		return false
 	}
-	switches, err := readSyncSwitches(s.db)
+	switches, err := readSyncSwitches(ctx, s.db)
 	if err != nil || !switches.Security {
 		return false
 	}

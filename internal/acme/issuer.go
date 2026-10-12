@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"lazy-balancer-v2/internal/dnsprovider"
@@ -417,6 +418,12 @@ func (i *Issuer) waitForDNS(ctx context.Context, fqdn, expected string, timeout 
 	consensusRounds := 0
 	firstProbeAt := time.Now()
 	divergenceDiagnosed := false
+	// C-3（第 73 轮）：逐台命中/失败/未命中行仅在「状态变化」时输出——
+	// 镜像 waitForValidation 的 lastChalStatus 先例，避免 5min 传播预算内
+	// 每轮逐台刷屏（单轮 4 递归 + N 权威，5min/3s≈100 轮可达数百行）。
+	// 权威与递归各持一份状态表（同一 server 地址在不同角色下语义不同）。
+	authState := &dnsLogState{}
+	recState := &dnsLogState{}
 
 	for {
 		// Authoritative name servers first: every reachable server must have
@@ -426,7 +433,7 @@ func (i *Issuer) waitForDNS(ctx context.Context, fqdn, expected string, timeout 
 		var authLastFound []string
 		var authLastResolver string
 		var authReady bool
-		authServers, authReady, authLastFound, authLastResolver = i.probeAuthServers(ctx, authServers, fqdn, expected)
+		authServers, authReady, authLastFound, authLastResolver = i.probeAuthServersLogged(ctx, authServers, fqdn, expected, authState)
 		if len(authLastFound) > 0 {
 			lastFound = authLastFound
 			lastResolver = authLastResolver
@@ -440,22 +447,34 @@ func (i *Issuer) waitForDNS(ctx context.Context, fqdn, expected string, timeout 
 		// ×连续 MinRounds 轮。权威全 miss 而递归命中的三形态（CNAME 委托/
 		// NS 变更/权威集群分裂）LE 验证均能跟随实际 DNS 状态成功，客户端
 		// 死等权威即恒超时；单台缓存超前（M9）由「多台共识×连续两轮」对冲。
+		//
+		// C-1（第 73 轮）：各台并行探测（每台独立 ctx 超时）——串行时黑洞
+		// 解析器（8.8.8.8/1.1.1.1 各 UDP+TCP 两次 8s 超时）把单轮膨胀到
+		// ~32s，5min 预算被磨成 ~10 轮；并行后单轮上界≈单台最坏耗时。
+		// 结果按 resolvers 顺序回填（顺序无关且清单顺序可复现）；日志统一
+		// 在调用方按顺序输出（Logger 非并发契约）。
+		probes := probeRecursiveParallel(ctx, resolvers, fqdn, expected)
 		var recursiveHits []string
-		for _, resolver := range resolvers {
-			hit, found, err := probeTXT(ctx, resolver, fqdn, expected, true)
-			if err != nil {
-				log("查询失败 %s @ %s: %v", fqdn, resolver, err)
+		for _, pr := range probes {
+			if pr.err != nil {
+				if recState.changed(pr.resolver, "error") {
+					log("查询失败 %s @ %s: %v", fqdn, pr.resolver, pr.err)
+				}
 				continue
 			}
-			if hit {
-				recursiveHits = append(recursiveHits, resolver)
-				log("递归 DNS 已命中 %s @ %s, 值: %s", fqdn, resolver, expected)
+			if pr.hit {
+				recursiveHits = append(recursiveHits, pr.resolver)
+				if recState.changed(pr.resolver, "hit") {
+					log("递归 DNS 已命中 %s @ %s, 值: %s", fqdn, pr.resolver, expected)
+				}
 				continue
 			}
-			if len(found) > 0 {
-				lastFound = found
-				lastResolver = resolver
-				log("DNS 未命中 %s @ %s, 期望: %s, 实际: %s", fqdn, resolver, expected, strings.Join(found, "; "))
+			if len(pr.found) > 0 {
+				lastFound = pr.found
+				lastResolver = pr.resolver
+				if recState.changed(pr.resolver, "miss:"+strings.Join(pr.found, ";")) {
+					log("DNS 未命中 %s @ %s, 期望: %s, 实际: %s", fqdn, pr.resolver, expected, strings.Join(pr.found, "; "))
+				}
 			}
 		}
 		lastRecursiveHits = recursiveHits
@@ -515,8 +534,8 @@ func orNone(list []string) string {
 var (
 	// resolveAuthoritativeNSFn 权威 NS 解析入口（测试替换为固定假权威清单）。
 	resolveAuthoritativeNSFn = resolveAuthoritativeNS
-	// propagationRecursiveResolvers waitForDNS 共识统计的公共递归清单
-	// （中国友好解析器在前）。
+	// propagationRecursiveResolvers 公共递归清单（中国友好解析器在前）——
+	// 单源：waitForDNS 共识统计与 checkRecursiveDNS 共用（C-2 第 73 轮）。
 	propagationRecursiveResolvers = []string{
 		"223.5.5.5:53",    // Alibaba AliDNS
 		"119.29.29.29:53", // Tencent DNSPod
@@ -525,6 +544,9 @@ var (
 	}
 	// propagationPollInterval 探测轮询间隔（生产 3s）。
 	propagationPollInterval = 3 * time.Second
+	// propagationResolverProbeTimeout 单台递归探测的独立 ctx 超时（C-1）——
+	// 每台 goroutine 各自 WithTimeout，一台黑洞解析器不得拖累同轮其余台。
+	propagationResolverProbeTimeout = 8 * time.Second
 	// propagationDivergenceDiagAfter 权威/递归分歧诊断日志阈值（生产 30s）。
 	propagationDivergenceDiagAfter = 30 * time.Second
 	// 递归共识放行阈值：≥MinHits 台递归命中当前值 × 连续 MinRounds 轮。
@@ -534,11 +556,13 @@ var (
 	propagationConsensusMinRounds = 2
 )
 
-// recursiveDNSResolvers / recursiveDNSPollInterval / recursiveDNSDeadline 是
-// checkRecursiveDNS 的测试接缝（var 而非 const，镜像 finalizeTimeout /
-// caQueueDrainTimeout 先例：测试按比例缩放预算保持墙钟快速，生产代码不得改写）。
+// recursiveDNSPollInterval / recursiveDNSDeadline 是 checkRecursiveDNS 的
+// 测试接缝（var 而非 const，镜像 finalizeTimeout / caQueueDrainTimeout 先例：
+// 测试按比例缩放预算保持墙钟快速，生产代码不得改写）。C-2（第 73 轮）：
+// 解析器清单不再各自持有字面量——checkRecursiveDNS 与 waitForDNS 共用
+// propagationRecursiveResolvers 单源（原 recursiveDNSResolvers 与
+// propagationRecursiveResolvers 双份同内容字面量，任一处改地址会有漏改）。
 var (
-	recursiveDNSResolvers    = []string{"223.5.5.5:53", "119.29.29.29:53", "8.8.8.8:53", "1.1.1.1:53"}
 	recursiveDNSPollInterval = 3 * time.Second
 
 	// recursiveDNSDeadline 必须覆盖公共递归负缓存（SOA negative TTL 通常
@@ -551,6 +575,20 @@ var (
 	recursiveDNSDeadline = 120 * time.Second
 )
 
+// checkRecursiveDNS 是 RequireRecursiveDNS（ZeroSSL）路径的递归可见性二次确认，
+// 语义**刻意弱于** waitForDNS 的递归共识放行，两者分层不得合并（C-7，第 73 轮）：
+//
+//   - 判据：任意 1 台公共递归命中即放行（「任一台可见」），无 MinHits×MinRounds
+//     共识门。ZeroSSL 只在 120s 内要求「公共递归已能解析到该 TXT」，单台可见
+//     已满足其验证前置；引入共识门会把正常签发拖到 120s 超时（ZeroSSL 授权
+//     窗口远短于 LE）。
+//   - 预算：120s（recursiveDNSDeadline），远短于 waitForDNS 的 5min 权威预算。
+//   - 定位：这是权威快速路径**之后**的额外确认，不是放行判据本身——权威已
+//     authReady（或递归共识已在 waitForDNS 内放行）才会走到这里。
+//
+// 不得把 waitForDNS 的共识结论（哪几台已命中）回传复用为这里的放行依据：
+// 两者解析器集合同源（C-2 单源），但判定时机/窗口/语义不同，复用会把
+// waitForDNS 的放行时机误当成 ZeroSSL 的确认结果。
 func (i *Issuer) checkRecursiveDNS(ctx context.Context, fqdn, expected string) bool {
 	deadline := time.After(recursiveDNSDeadline)
 	ticker := time.NewTicker(recursiveDNSPollInterval)
@@ -562,7 +600,7 @@ func (i *Issuer) checkRecursiveDNS(ctx context.Context, fqdn, expected string) b
 		case <-deadline:
 			return false
 		case <-ticker.C:
-			for _, r := range recursiveDNSResolvers {
+			for _, r := range propagationRecursiveResolvers {
 				if hit, _, _ := probeTXT(ctx, r, fqdn, expected, true); hit {
 					if i.Logger != nil {
 						i.Logger.Log("waiting_propagation", fmt.Sprintf("递归 DNS 已命中 %s @ %s", fqdn, r))
@@ -579,7 +617,17 @@ func (i *Issuer) checkRecursiveDNS(ctx context.Context, fqdn, expected string) b
 // they stop consuming propagation budget; a miss keeps the server alive for
 // the next round. ready reports whether every server already holds the
 // expected record.
+//
+// 本次调用持全新日志状态（每次调用都打印）——单发形态的兼容接缝；多轮轮询
+// 走 probeAuthServersLogged 共享状态表，仅状态变化时打印（C-3 第 73 轮）。
 func (i *Issuer) probeAuthServers(ctx context.Context, servers []string, fqdn, expected string) (alive []string, ready bool, lastFound []string, lastResolver string) {
+	return i.probeAuthServersLogged(ctx, servers, fqdn, expected, &dnsLogState{})
+}
+
+// probeAuthServersLogged 是多轮轮询形态：state 跨轮记录每台权威上次打印的
+// 状态，命中/失败/未命中/无记录行仅在状态变化时输出（镜像 waitForValidation
+// 的 lastChalStatus 先例，收敛 5min 预算内的逐台刷屏噪音）。
+func (i *Issuer) probeAuthServersLogged(ctx context.Context, servers []string, fqdn, expected string, state *dnsLogState) (alive []string, ready bool, lastFound []string, lastResolver string) {
 	log := func(format string, args ...any) {
 		if i.Logger != nil {
 			i.Logger.Log("waiting_propagation", fmt.Sprintf(format, args...))
@@ -591,23 +639,80 @@ func (i *Issuer) probeAuthServers(ctx context.Context, servers []string, fqdn, e
 		switch {
 		case err != nil:
 			ready = false
-			log("权威 DNS 查询失败 %s @ %s: %v", fqdn, server, err)
+			if state.changed(server, "error") {
+				log("权威 DNS 查询失败 %s @ %s: %v", fqdn, server, err)
+			}
 		case hit:
 			alive = append(alive, server)
-			log("权威 DNS 已命中 %s @ %s, 值: %s", fqdn, server, expected)
+			if state.changed(server, "hit") {
+				log("权威 DNS 已命中 %s @ %s, 值: %s", fqdn, server, expected)
+			}
 		default:
 			ready = false
 			alive = append(alive, server)
 			if len(found) > 0 {
 				lastFound = found
 				lastResolver = server + " (auth)"
-				log("权威 DNS 未命中 %s @ %s, 期望: %s, 实际: %s", fqdn, server, expected, strings.Join(found, "; "))
-			} else {
+				if state.changed(server, "miss:"+strings.Join(found, ";")) {
+					log("权威 DNS 未命中 %s @ %s, 期望: %s, 实际: %s", fqdn, server, expected, strings.Join(found, "; "))
+				}
+			} else if state.changed(server, "nodata") {
 				log("权威 DNS 无 TXT 记录 %s @ %s", fqdn, server)
 			}
 		}
 	}
 	return alive, ready, lastFound, lastResolver
+}
+
+// dnsLogState 记录每个探针目标上一次打印的状态，使逐台命中/失败/未命中行
+// 仅在状态变化时输出（C-3 第 73 轮，镜像 waitForValidation 的 lastChalStatus
+// 先例）。零值可用；nil 视为「总是变化」（首次必打）。
+type dnsLogState struct {
+	last map[string]string
+}
+
+func (s *dnsLogState) changed(key, state string) bool {
+	if s == nil {
+		return true
+	}
+	if s.last == nil {
+		s.last = make(map[string]string)
+	}
+	if s.last[key] == state {
+		return false
+	}
+	s.last[key] = state
+	return true
+}
+
+// recursiveProbeResult 单台公共递归的一轮探测结果（C-1 并行收集用）。
+type recursiveProbeResult struct {
+	resolver string
+	hit      bool
+	found    []string
+	err      error
+}
+
+// probeRecursiveParallel 并行探测全部公共递归，按输入顺序回填结果（C-1 第
+// 73 轮）。每台独立 ctx 超时（propagationResolverProbeTimeout）——一台黑洞
+// 解析器（8.8.8.8/1.1.1.1 在受限网络内 UDP/TCP 双 8s 超时）不再把单轮串行
+// 拖到 ~32s。日志不在并发 goroutine 内写（Logger 非并发契约），统一由调用方
+// 按结果顺序输出。
+func probeRecursiveParallel(ctx context.Context, resolvers []string, fqdn, expected string) []recursiveProbeResult {
+	results := make([]recursiveProbeResult, len(resolvers))
+	var wg sync.WaitGroup
+	for idx, resolver := range resolvers {
+		wg.Add(1)
+		go func(idx int, resolver string) {
+			defer wg.Done()
+			probeCtx, cancel := context.WithTimeout(ctx, propagationResolverProbeTimeout)
+			defer cancel()
+			hit, found, err := probeTXT(probeCtx, resolver, fqdn, expected, true)
+			results[idx] = recursiveProbeResult{resolver: resolver, hit: hit, found: found, err: err}
+		}(idx, resolver)
+	}
+	wg.Wait()
+	return results
 }
 
 // probeTXT queries a single DNS server for the TXT records of fqdn over UDP,

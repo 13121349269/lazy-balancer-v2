@@ -263,9 +263,10 @@ func ForeignRunningRuleRoutes(adminURL string, ownIDs map[string]bool) ([]string
 	for id := range ownIDs {
 		own[id] = id
 	}
+	claimed := claimedRoutePrefixes(own)
 	var foreign []string
 	for routeID := range running {
-		if !routeClaimedByAny(routeID, own) {
+		if !routeClaimedByAny(routeID, claimed) {
 			foreign = append(foreign, routeID)
 		}
 	}
@@ -284,21 +285,43 @@ func diffExpectedMissing(expected map[string]string, running map[string]bool) []
 
 func diffRunningExtra(expected map[string]string, running map[string]bool) []string {
 	var extra []string
+	claimed := claimedRoutePrefixes(expected)
 	for routeID := range running {
 		// 子路由（lb_x_redirect / lb_x_path_0 等，caddy.go tagRuleRoute 系）属于其
 		// 主规则——仅当没有任何期望规则认领该 @id 时才计为多余（R36 WD-1：
 		// 精确匹配会把每条 HTTPS 跳转/路径规则的子路由误报为多余）。
-		if !routeClaimedByAny(routeID, expected) {
+		if !routeClaimedByAny(routeID, claimed) {
 			extra = append(extra, routeID)
 		}
 	}
 	return extra
 }
 
-func routeClaimedByAny(routeID string, expected map[string]string) bool {
+// claimedRoutePrefixes（SVC-C1，第 73 轮）预建路由认领前缀集合：每个期望
+// @id 收录其自身与 "<id>_" 两种形态，供 routeClaimedByAny 单次 O(1)/O(len)
+// 判定——替代原先每 routeID 全量扫描期望集合的 O(running×expected)。行为
+// 等价于 `routeID == caddyID || strings.HasPrefix(routeID, caddyID+"_")`。
+func claimedRoutePrefixes(expected map[string]string) map[string]struct{} {
+	set := make(map[string]struct{}, len(expected)*2)
 	for caddyID := range expected {
-		if routeID == caddyID || strings.HasPrefix(routeID, caddyID+"_") {
-			return true
+		set[caddyID] = struct{}{}
+		set[caddyID+"_"] = struct{}{}
+	}
+	return set
+}
+
+// routeClaimedByAny 判定 routeID 是否被某个期望 @id 认领：精确命中集合，或
+// routeID 以某期望 @id+"_" 为前缀（子路由归属主规则）。claimed 由
+// claimedRoutePrefixes 预建（SVC-C1）。
+func routeClaimedByAny(routeID string, claimed map[string]struct{}) bool {
+	if _, ok := claimed[routeID]; ok {
+		return true
+	}
+	for i := 1; i < len(routeID); i++ {
+		if routeID[i] == '_' {
+			if _, ok := claimed[routeID[:i+1]]; ok {
+				return true
+			}
 		}
 	}
 	return false

@@ -1229,28 +1229,29 @@ func maxRenewalAttemptsMessage(message string, maxAttempts int) string {
 	return fmt.Sprintf("%s（%s %d，停止自动重试，可手动重试）", message, marker, maxAttempts)
 }
 
-func failJob(jobID int, message string) {
+// failJobTransition 是 failJob/failJobFromStatus 的共享实现（C-4 第 73 轮）：
+// 二者唯一差异是允许的来源状态集合（fromSet），其余（尝试次数封顶文案、消息
+// 截断、UPDATE、留痕）完全同构。
+func failJobTransition(jobID int, fromSet []string, message string) {
 	if attempts := currentRenewalAttempts(jobID); attempts+1 >= GetCertRenewalAttempts() {
 		message = maxRenewalAttemptsMessage(message, GetCertRenewalAttempts())
 	}
 	message = truncateJobMessage(message)
-	err := transitionJob(db.DB, jobID, nonTerminalJobStatuses, "failed", map[string]any{
+	err := transitionJob(db.DB, jobID, fromSet, "failed", map[string]any{
 		"message":          message,
 		"renewal_attempts": jobSQLExpression("COALESCE(renewal_attempts,0)+1"),
 	})
 	recordFailedJobTransition(jobID, message, err)
 }
 
+// failJob 把任务标记为 failed（来源=任意非终态状态）。
+func failJob(jobID int, message string) {
+	failJobTransition(jobID, nonTerminalJobStatuses, message)
+}
+
+// failJobFromStatus 仅在任务处于 expectedStatus 时标记为 failed（CAS 语义）。
 func failJobFromStatus(jobID int, expectedStatus, message string) {
-	if attempts := currentRenewalAttempts(jobID); attempts+1 >= GetCertRenewalAttempts() {
-		message = maxRenewalAttemptsMessage(message, GetCertRenewalAttempts())
-	}
-	message = truncateJobMessage(message)
-	err := transitionJob(db.DB, jobID, []string{expectedStatus}, "failed", map[string]any{
-		"message":          message,
-		"renewal_attempts": jobSQLExpression("COALESCE(renewal_attempts,0)+1"),
-	})
-	recordFailedJobTransition(jobID, message, err)
+	failJobTransition(jobID, []string{expectedStatus}, message)
 }
 
 // currentRenewalAttempts 读取任务当前续签失败次数（读取失败按 0 处理，

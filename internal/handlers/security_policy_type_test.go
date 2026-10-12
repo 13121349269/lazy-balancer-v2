@@ -209,10 +209,10 @@ func TestListAndGetSecurityPolicy_carryPolicyType(t *testing.T) {
 	}
 }
 
-// 混合策略仅可更新迁移（2026-09-20 用户裁定）：三个绑定写入口
-// （BindRuleToPolicy / SetRuleSecurityPolicies / BatchBindSecurityPolicies）
-// 一律 400 拒绝 mixed 策略 id——存量混合绑定保持有效（迁移前不清除），
-// 但不得新增。前端绑定编辑器同步过滤 mixed 可选项。
+// 混合策略仅可更新迁移（2026-09-20 用户裁定）：四个绑定写入口
+// （BindRuleToPolicy / SetRuleSecurityPolicies / BatchBindSecurityPolicies /
+// BulkUpdatePolicyBindings）一律 400 拒绝 mixed 策略 id——存量混合绑定保持
+// 有效（迁移前不清除），但不得新增。前端绑定编辑器同步过滤 mixed 可选项。
 func TestBindWritePaths_rejectMixedPolicies(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
 	gin.SetMode(gin.TestMode)
@@ -225,6 +225,7 @@ func TestBindWritePaths_rejectMixedPolicies(t *testing.T) {
 	router.POST("/security/policies/:id/bind", h.BindRuleToPolicy)
 	router.PUT("/security/rules/:caddy_id/policies", h.SetRuleSecurityPolicies)
 	router.POST("/security/policies/batch-bind", h.BatchBindSecurityPolicies)
+	router.POST("/security/policies/:id/bindings/bulk", h.BulkUpdatePolicyBindings)
 
 	// Given：mixed 策略 + 单职策略 + http 规则
 	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,mode,policy_type,enabled) VALUES
@@ -261,6 +262,12 @@ func TestBindWritePaths_rejectMixedPolicies(t *testing.T) {
 	response = postStageJSON(t, router, "/security/policies/batch-bind", `{"rule_ids":["lb_mb"],"policy_ids":[1],"mode":"merge"}`)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("batch-bind with mixed status=%d body=%s, want 400", response.Code, response.Body.String())
+	}
+
+	// BulkUpdatePolicyBindings（第 73 轮 F1）：mixed 策略 id → 400
+	response = postJSON(t, router, "/security/policies/1/bindings/bulk", map[string]any{"bind": []string{"lb_mb"}, "unbind": []string{}})
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("bulk with mixed status=%d body=%s, want 400", response.Code, response.Body.String())
 	}
 }
 

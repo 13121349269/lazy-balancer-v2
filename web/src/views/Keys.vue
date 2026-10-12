@@ -370,7 +370,7 @@ interface CreateAPIKeyResponse {
 const authStore = useAuthStore()
 // M30：slave 节点只读；主节点非 admin 可管理本人密钥（后端强制只读 Key，
 // 白名单 60b43841 放行非 admin 自助密钥端点），故写入口仅按从节点收紧。
-const nodeModeSlave = computed(() => authStore.readOnlyReason === 'slave')
+const nodeModeSlave = computed(() => authStore.isSlaveNode)
 const isAdmin = computed(() => authStore.user?.role === 'admin')
 
 const keys = ref<readonly APIKey[]>([])

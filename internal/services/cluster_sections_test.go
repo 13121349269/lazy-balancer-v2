@@ -51,7 +51,7 @@ func TestComputeSectionSkips_switchOffAndHashMatch(t *testing.T) {
 	seedAppliedSection(t, database, "users", "u1")
 	seedAppliedSection(t, database, "rules", "r1")
 
-	switches, err := readSyncSwitches(database)
+	switches, err := readSyncSwitches(context.Background(), database)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestComputeSectionSkips_allOnFirstSyncAppliesEverything(t *testing.T) {
 	_, database := newClusterTestService(t)
 	snapshot := models.ClusterSnapshot{Version: 1}
 	snapshot.SectionHashes = map[string]string{"rules": "r1", "security": "s1"}
-	switches, err := readSyncSwitches(database)
+	switches, err := readSyncSwitches(context.Background(), database)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,14 +236,14 @@ func TestWafFilesDrifted_securitySwitchOffReturnsFalse(t *testing.T) {
 		t.Fatal(err)
 	}
 	service := NewSyncService(database, &config.Config{}, nil)
-	if service.wafFilesDrifted() {
+	if service.wafFilesDrifted(context.Background()) {
 		t.Fatal("wafFilesDrifted must return false when security switch is off (file state exempt from sync)")
 	}
 	// 开关开启 + 本地文件与已应用记录分叉 → 必须检出漂移。
 	if _, err := database.Exec(`UPDATE global_config SET sync_security=1 WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}
-	if !service.wafFilesDrifted() {
+	if !service.wafFilesDrifted(context.Background()) {
 		t.Fatal("wafFilesDrifted must detect local/applied divergence with security switch on")
 	}
 	_ = localHash
@@ -526,7 +526,7 @@ func TestReadSyncSwitches_forcesUsersOn(t *testing.T) {
 	if _, err := database.Exec(`UPDATE global_config SET sync_users=0 WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}
-	sw, err := readSyncSwitches(database)
+	sw, err := readSyncSwitches(context.Background(), database)
 	if err != nil {
 		t.Fatal(err)
 	}

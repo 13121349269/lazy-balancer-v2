@@ -429,7 +429,7 @@ const handleSubmit = async () => {
   fetchUsers()
 }
 
-const nodeModeSlave = computed(() => authStore.readOnlyReason === 'slave')
+const nodeModeSlave = computed(() => authStore.isSlaveNode)
 
 const editUser = (user: UserListItem) => {
   // 2026-09-19 用户裁定（覆盖 R72 六次）：非管理员只读范围含用户认证页——

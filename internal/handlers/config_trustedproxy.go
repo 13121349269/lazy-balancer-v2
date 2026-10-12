@@ -103,6 +103,37 @@ func trustedProxyInlineCount(req *models.UpdateConfigRequest) (int, error) {
 	return len(entries), nil
 }
 
+// idChunk 是一个 id 分片及其预构造的 IN 子句占位符与参数（SYS-REST-F2 第 73
+// 轮：受信代理两处 500 分片样板单源——仅共享分片构造，不合并查询/校验语义）。
+type idChunk struct {
+	ids          []int64
+	placeholders string
+	args         []any
+}
+
+// chunkIDs 把 id 列表按 chunkSize 切分为若干分片，每片预构造
+// `?,?,...` 占位符与配套参数（SQLite 变量数上限下的分批口径）。
+func chunkIDs(ids []int64, chunkSize int) []idChunk {
+	if len(ids) == 0 {
+		return nil
+	}
+	chunks := make([]idChunk, 0, (len(ids)+chunkSize-1)/chunkSize)
+	for start := 0; start < len(ids); start += chunkSize {
+		end := start + chunkSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		chunk := ids[start:end]
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(chunk)), ",")
+		args := make([]any, len(chunk))
+		for i, id := range chunk {
+			args[i] = id
+		}
+		chunks = append(chunks, idChunk{ids: chunk, placeholders: placeholders, args: args})
+	}
+	return chunks
+}
+
 // trustedProxyStoredRefEntries 返回库中存量 trusted_proxy_range_refs 的引用
 // 展开条目总数（SYS-F3 总量门对称面：仅更新内联网段时引用面按存量计）。
 // 存量 refs JSON 畸形/引用悬空/条目不可解析（仅见于带外改库）按 0 计——与
@@ -118,18 +149,8 @@ func trustedProxyStoredRefEntries() (int, error) {
 		return 0, nil
 	}
 	total := 0
-	for start := 0; start < len(ids); start += 500 {
-		end := start + 500
-		if end > len(ids) {
-			end = len(ids)
-		}
-		chunk := ids[start:end]
-		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(chunk)), ",")
-		args := make([]any, len(chunk))
-		for i, id := range chunk {
-			args[i] = id
-		}
-		rows, err := db.DB.Query(`SELECT COALESCE(entries,'[]') FROM security_ip_lists WHERE id IN (`+placeholders+`)`, args...)
+	for _, ch := range chunkIDs(ids, 500) {
+		rows, err := db.DB.Query(`SELECT COALESCE(entries,'[]') FROM security_ip_lists WHERE id IN (`+ch.placeholders+`)`, ch.args...)
 		if err != nil {
 			return 0, fmt.Errorf("读取受信代理引用名单失败: %v", err)
 		}
@@ -182,22 +203,12 @@ func normalizeTrustedProxyRangeRefs(raw string) (string, int, error) {
 		return "[]", 0, nil
 	}
 	total := 0
-	for start := 0; start < len(unique); start += 500 {
-		end := start + 500
-		if end > len(unique) {
-			end = len(unique)
-		}
-		chunk := unique[start:end]
-		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(chunk)), ",")
-		args := make([]any, len(chunk))
-		for i, id := range chunk {
-			args[i] = id
-		}
-		rows, err := db.DB.Query(`SELECT id, COALESCE(entries,'[]'), COALESCE(name,'') FROM security_ip_lists WHERE id IN (`+placeholders+`)`, args...)
+	for _, ch := range chunkIDs(unique, 500) {
+		rows, err := db.DB.Query(`SELECT id, COALESCE(entries,'[]'), COALESCE(name,'') FROM security_ip_lists WHERE id IN (`+ch.placeholders+`)`, ch.args...)
 		if err != nil {
 			return "", 0, fmt.Errorf("校验受信代理引用列表失败: %v", err)
 		}
-		found := make(map[int64]int, len(chunk))
+		found := make(map[int64]int, len(ch.ids))
 		for rows.Next() {
 			var id int64
 			var entriesJSON, name string
@@ -230,7 +241,7 @@ func normalizeTrustedProxyRangeRefs(raw string) (string, int, error) {
 			return "", 0, fmt.Errorf("校验受信代理引用列表失败: %v", err)
 		}
 		rows.Close()
-		for _, id := range chunk {
+		for _, id := range ch.ids {
 			if _, ok := found[id]; !ok {
 				return "", 0, fmt.Errorf("受信代理引用的地址列表不存在：#%d", id)
 			}

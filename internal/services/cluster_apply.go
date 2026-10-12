@@ -188,7 +188,7 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 	// 跳过 → 每周期全量重拉死循环（主节点「同步下发」审计随之刷屏）。
 	// changed 标志在函数作用域声明，供末段条件重载判定（F-L5-68-01）。
 	var crsChanged, xdbChanged, threatChanged bool
-	if switches.Security && (wafFilesRefDiffers(snapshot.WafFiles) || s.wafFilesDrifted()) {
+	if switches.Security && (wafFilesRefDiffers(snapshot.WafFiles) || s.wafFilesDrifted(ctx)) {
 		// 2026-09-18 用户裁定:同步日志与自动更新日志同款分阶段流水——唯一
 		// 区别是来源(主节点 vs GitHub),弹框日志可对照阅读。
 		WriteCRSUpdateLog("INFO", "checking", "从主节点校验 CRS 规则版本")

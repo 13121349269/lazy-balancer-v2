@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 	"sync"
@@ -81,7 +82,17 @@ func (p *Provider) Present(ctx context.Context, zone, tokenFQDN, value string, t
 	if p.ownership != nil {
 		record := ownership.Record{Provider: "tencent", Zone: zone, FQDN: tokenFQDN, Value: value, RecordID: strconv.FormatUint(recordID, 10)}
 		if err := p.ownership.Add(record); err != nil {
-			return errors.Join(err, p.deleteRecord(ctx, zone, recordID))
+			rollbackErr := p.deleteRecord(ctx, zone, recordID)
+			if rollbackErr != nil {
+				// A-2（第 73 轮）：ownership.Add 失败且回滚删除亦失败——TXT 已落
+				// DNS，而 ownership 无条目可追踪。告警留痕 + 回填内存兜底表：
+				// cleanUp 的 ownership 分支会排空兜底表并重试删除，避免永久残留。
+				log.Printf("WARNING: tencent: 所有权写入失败且回滚删除失败，TXT %s (recordID=%d) 可能残留: %v", tokenFQDN, recordID, rollbackErr)
+				p.mu.Lock()
+				p.owned[zone+"|"+subDomain] = append(p.owned[zone+"|"+subDomain], ownedRecord{recordID: recordID, value: value})
+				p.mu.Unlock()
+			}
+			return errors.Join(err, rollbackErr)
 		}
 	} else {
 		p.mu.Lock()
@@ -103,6 +114,11 @@ func (p *Provider) CleanUpValue(ctx context.Context, zone, tokenFQDN, value stri
 	return p.cleanUp(ctx, zone, tokenFQDN, value, true)
 }
 
+// cleanUp 是 CleanUp/CleanUpValue 的共享实现（按值定向删除+陈旧条目清理）。
+//
+// A-4（第 73 轮登记）：本函数与 internal/dnsprovider/dnspod/dnspod.go 的
+// cleanUp 是同构双实现（有意保留——两者底层 SDK/记录 ID 类型不同）。任一侧
+// 修改删除/留痕/兜底排空逻辑时，MUST 同步另一侧并保持语义一致。
 func (p *Provider) cleanUp(ctx context.Context, zone, tokenFQDN, value string, byValue bool) error {
 	zone = strings.TrimSuffix(zone, ".")
 	subDomain := strings.TrimSuffix(tokenFQDN, ".")
@@ -171,6 +187,21 @@ func (p *Provider) cleanUp(ctx context.Context, zone, tokenFQDN, value string, b
 				continue
 			}
 			cleanupErr = errors.Join(cleanupErr, p.ownership.Remove(record))
+		}
+		// A-2 兜底排空（第 73 轮）：Present 在「ownership.Add 失败 + 回滚删除
+		// 失败」时把 recordID 回填进内存兜底表（store 无条目可追踪）。此处重试
+		// 删除这些兜底条目——成功即清除，失败回填供下次重试（幂等）。store 模式
+		// 下 p.owned 仅承载该兜底回填，正常路径为空，排空不影响既有语义。
+		p.mu.Lock()
+		fallback := p.owned[key]
+		delete(p.owned, key)
+		p.mu.Unlock()
+		for _, entry := range fallback {
+			if deleteOne(entry.recordID) != nil {
+				p.mu.Lock()
+				p.owned[key] = append(p.owned[key], entry)
+				p.mu.Unlock()
+			}
 		}
 	} else {
 		for _, entry := range memorySelected {

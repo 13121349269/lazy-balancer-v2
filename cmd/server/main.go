@@ -189,7 +189,8 @@ func run() error {
 	services.SetCertIssuanceLifecycleHooks(lifecycle.StartACME, lifecycle.StopACME)
 	services.SetSyncLifecycleHooks(syncService.Start, syncService.Stop)
 	services.InitTaskEngine(cfg.CaddyAdminURL, runtimeLogFile) // 前置设施——非任务
-	defer services.StopTaskEngine()
+	// 引擎收尾统一交由下方 tail defer（StopTaskEngine 幂等）；此处不再重复
+	// defer（INFRA-1 第 73 轮：双 defer 依赖幂等，收敛单点收尾）。
 
 	// Setup router
 	router := middleware.SetupRouter(h, cfg)

@@ -2117,12 +2117,18 @@ func TestImportConfigBackup_normalizes_null_rows_for_all_backup_tables(t *testin
 		"users": {{"id": 2, "username": "null-user", "password_hash": "hash", "role": "admin", "is_enabled": nil,
 			"display_name": nil, "created_at": nil, "last_login": nil,
 			"mfa_enabled": nil, "mfa_secret": nil, "mfa_recovery_codes": nil}},
-		"lb_rules": {{"caddy_id": "lb_nulldump", "name": "null-cols", "protocol": "http", "domain": "nulldump.example.test",
-			"listen_port": 8461, "enabled": nil, "description": nil, "strategy": nil, "dns_server": nil, "dns_family": nil,
-			"health_check_path": nil, "host_header": nil, "tls_source": nil, "compress_types": nil, "enable_compress": nil,
-			"server_tokens_hidden": nil, "tcp_try_interval": nil, "health_check_interval": nil,
-			"created_by": nil, "updated_by": nil, "enable_tls": 0, "custom_routes_enabled": 1,
-			"created_at": nil, "updated_at": nil}},
+		// X-1（第 73 轮 P5）：cert_jobs 行的被测规则须处于 ACME 自动签发态
+		//（enabled=1+enable_tls=1+tls_source=acme_dns），否则导入侧的失效任务
+		// 清理（config_backup.go）会删除该行——本规则专供 cert_jobs 消费点使用。
+		"lb_rules": {
+			{"caddy_id": "lb_nulldump", "name": "null-cols", "protocol": "http", "domain": "nulldump.example.test",
+				"listen_port": 8461, "enabled": nil, "description": nil, "strategy": nil, "dns_server": nil, "dns_family": nil,
+				"health_check_path": nil, "host_header": nil, "tls_source": nil, "compress_types": nil, "enable_compress": nil,
+				"server_tokens_hidden": nil, "tcp_try_interval": nil, "health_check_interval": nil,
+				"created_by": nil, "updated_by": nil, "enable_tls": 0, "custom_routes_enabled": 1,
+				"created_at": nil, "updated_at": nil},
+			{"caddy_id": "lb_nullacme", "name": "null-acme", "protocol": "http", "domain": "nullacme.example.test",
+				"listen_port": 8462, "enabled": 1, "enable_tls": 1, "tls_source": "acme_dns", "acme_config_id": 92}},
 		"upstreams": {{"rule_id": "lb_nulldump", "host": "127.0.0.1", "port": 9461, "weight": nil, "enabled": nil,
 			"protocol": nil, "max_connections": nil, "dynamic_dns": nil}},
 		"path_rules": {{"id": 1, "rule_id": "lb_nulldump", "sort_order": 1, "match_type": "prefix", "path": "/null",
@@ -2133,9 +2139,12 @@ func TestImportConfigBackup_normalizes_null_rows_for_all_backup_tables(t *testin
 		"ca_providers": {{"id": 90, "name": "null-ca", "provider": "zerossl", "directory_url": "https://ca.null/dir",
 			"credentials": nil, "max_concurrent": nil, "min_interval_ms": nil, "enabled": nil,
 			"created_at": nil, "updated_at": nil}},
-		"certificate_configs": {{"id": 91, "name": "null-dns", "dns_provider": nil, "dns_credentials": nil, "enabled": nil,
-			"created_at": nil, "updated_at": nil}},
-		"cert_jobs": {{"id": 1, "rule_id": "lb_nulldump", "domain": "nulldump.example.test", "status": "issued",
+		"certificate_configs": {
+			{"id": 91, "name": "null-dns", "dns_provider": nil, "dns_credentials": nil, "enabled": nil,
+				"created_at": nil, "updated_at": nil},
+			{"id": 92, "name": "null-dns-live", "dns_provider": "dnspod", "enabled": 1},
+		},
+		"cert_jobs": {{"id": 1, "rule_id": "lb_nullacme", "domain": "nullacme.example.test", "status": "issued",
 			"ca_provider_id": nil, "renewal_attempts": nil, "deployment_attempts": nil, "created_at": nil,
 			"message": nil, "expires_at": nil, "key_pem": nil, "ca_available_after": nil,
 			"last_error_code": nil, "deployment_available_after": nil, "updated_at": nil}},
@@ -2235,7 +2244,7 @@ func TestImportConfigBackup_normalizes_null_rows_for_all_backup_tables(t *testin
 	// renewal_attempts/deployment_attempts 为 raw int 扫描（NULL→UpdateRule 补偿硬失败）。
 	certRows, err := db.DB.Query(`SELECT id,rule_id,domain,status,message,expires_at,cert_pem,key_pem,ca_provider_id,
 		renewal_attempts,ca_available_after,last_error_code,deployment_attempts,deployment_available_after,created_at,updated_at
-		FROM cert_jobs WHERE rule_id=? ORDER BY id`, "lb_nulldump")
+		FROM cert_jobs WHERE rule_id=? ORDER BY id`, "lb_nullacme")
 	if err != nil {
 		t.Fatalf("query cert jobs: %v", err)
 	}
@@ -2267,9 +2276,19 @@ func TestImportConfigBackup_normalizes_null_rows_for_all_backup_tables(t *testin
 	if scanned != 1 {
 		t.Fatalf("cert_jobs scanned=%d, want 1", scanned)
 	}
+	// X-1（第 73 轮 P5）：非 ACME 态规则（lb_nulldump: enable_tls=0）的 cert_jobs
+	// 行随导入失效任务清理删除——此前只清孤儿行（rule_id 不在 lb_rules），此类
+	// 「规则仍在但已非 ACME」的残留会被续签扫描/任务列表当作活任务。
+	var orphanJobs int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM cert_jobs WHERE rule_id='lb_nulldump'`).Scan(&orphanJobs); err != nil {
+		t.Fatalf("count lb_nulldump cert jobs: %v", err)
+	}
+	if orphanJobs != 0 {
+		t.Fatalf("lb_nulldump cert_jobs rows=%d, want 0（非 ACME 规则的失效任务须清理）", orphanJobs)
+	}
 	// 消费点 4b（certjobs.go 列表同形）：j.created_at 为 raw time.Time 扫描。
 	var jobCreatedAt time.Time
-	if err := db.DB.QueryRow("SELECT j.created_at FROM cert_jobs j WHERE j.rule_id=?", "lb_nulldump").Scan(&jobCreatedAt); err != nil {
+	if err := db.DB.QueryRow("SELECT j.created_at FROM cert_jobs j WHERE j.rule_id=?", "lb_nullacme").Scan(&jobCreatedAt); err != nil {
 		t.Fatalf("cert_jobs list-shaped created_at scan must survive normalized restore: %v", err)
 	}
 
