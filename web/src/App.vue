@@ -16,6 +16,7 @@
       <SecurityBlockPages v-else-if="currentPage === 'security-block-pages'" />
       <SecurityOverview v-else-if="currentPage === 'security-overview'" />
       <SecurityEvents v-else-if="currentPage === 'security-events'" />
+      <AutoBanSettings v-else-if="currentPage === 'security-auto-ban'" />
       <Settings v-else-if="currentPage === 'settings-basic' || currentPage === 'settings-cluster' || currentPage === 'settings-certificates' || currentPage === 'settings-apikeys' || currentPage === 'settings-tasks'" />
       <CaddyConfig v-else-if="currentPage === 'caddy'" />
       <Users v-else-if="currentPage === 'users'" />
@@ -54,6 +55,7 @@ const SecurityRules = createAsyncPage(() => import('@/views/security/SecurityRul
 const SecurityBlockPages = createAsyncPage(() => import('@/views/security/SecurityBlockPages.vue'))
 const SecurityOverview = createAsyncPage(() => import('@/views/security/SecurityOverview.vue'))
 const SecurityEvents = createAsyncPage(() => import('@/views/security/SecurityEvents.vue'))
+const AutoBanSettings = createAsyncPage(() => import('@/views/security/AutoBanSettings.vue'))
 const Settings = createAsyncPage(() => import('@/views/Settings.vue'))
 const CaddyConfig = createAsyncPage(() => import('@/views/CaddyConfig.vue'))
 const Users = createAsyncPage(() => import('@/views/Users.vue'))

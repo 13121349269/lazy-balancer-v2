@@ -255,6 +255,18 @@ type ClusterBasicSettings struct {
 	ThreatAutoUpdate   *bool   `json:"threat_auto_update,omitempty"`
 	ThreatScheduleDays *string `json:"threat_schedule_days,omitempty"`
 	ThreatScheduleTime *string `json:"threat_schedule_time,omitempty"`
+	// WAF 自动封禁设置组（指针+omitempty 缺席语义与自动备份组一致）。
+	AutoBanEnabled       *bool `json:"auto_ban_enabled,omitempty"`
+	AutoBanThreshold     *int  `json:"auto_ban_threshold,omitempty"`
+	AutoBanWindowMinutes *int  `json:"auto_ban_window_minutes,omitempty"`
+	AutoBanDurationHours *int  `json:"auto_ban_duration_hours,omitempty"`
+	AutoBanScanEnabled   *bool `json:"auto_ban_scan_enabled,omitempty"`
+	AutoBanScanThreshold *int  `json:"auto_ban_scan_threshold,omitempty"`
+	// CC 防护封禁联动设置组。
+	CCBanEnabled       *bool `json:"cc_ban_enabled,omitempty"`
+	CCBanThreshold     *int  `json:"cc_ban_threshold,omitempty"`
+	CCBanWindowMinutes *int  `json:"cc_ban_window_minutes,omitempty"`
+	CCBanDurationHours *int  `json:"cc_ban_duration_hours,omitempty"`
 }
 
 type ClusterUser struct {

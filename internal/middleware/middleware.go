@@ -456,7 +456,16 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				admin.POST("/settings/oidc/test", h.OIDCSettingsTest)
 				admin.DELETE("/settings/oidc", h.OIDCSettingsDelete)
 
-				// Security (admin write)
+				// waf v2.3.x fail2ban ip
+				admin.GET("/settings/auto-ban", h.WafAutoBanSettings)
+				admin.PUT("/settings/auto-ban", h.UpdateWafAutoBanSettings)
+				admin.POST("/auto-ban/run", h.RunWafAutoBanNow)
+				// cc 429 ban
+				admin.GET("/settings/cc-ban", h.WafCCBanSettings)
+				admin.PUT("/settings/cc-ban", h.UpdateWafCCBanSettings)
+				admin.POST("/cc-ban/run", h.RunCCBanNow)
+
+			// Security (admin write)
 				admin.POST("/security/policies", h.CreateSecurityPolicy)
 				admin.PUT("/security/policies/:id", h.UpdateSecurityPolicy)
 				admin.DELETE("/security/policies/:id", h.DeleteSecurityPolicy)

@@ -127,6 +127,7 @@ func run() error {
 	services.InitCRSUpdateManager(caddyReloader)
 	services.InitIP2Region()
 	services.InitIP2RegionUpdateManager(caddyReloader)
+	services.InitWafAutoBanManager(caddyService)
 	metricsService := services.NewMetricsService(cfg.CaddyMetricsURL, cfg.MetricsInterval)
 	syncService := services.NewSyncService(db.DB, cfg, caddyService)
 	lifecycle := newRuntimeLifecycle(syncService, func() certificateWorker {
@@ -216,6 +217,9 @@ func run() error {
 	crsManager.SetMasterRole(isMaster)
 	if ip2RegionManager := services.GetIP2RegionUpdateManager(); ip2RegionManager != nil {
 		ip2RegionManager.SetMasterRole(isMaster)
+	}
+	if wafAutoBanManager := services.GetWafAutoBanManager(); wafAutoBanManager != nil {
+		wafAutoBanManager.SetMasterRole(isMaster)
 	}
 	// 事件保留清理针对本节点本地表，与集群角色无关（从节点也摄入事件）
 	// M4：任务引擎在场由引擎每日驱动；测试环境（无引擎）回退原生启动器

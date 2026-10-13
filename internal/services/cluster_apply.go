@@ -1234,6 +1234,64 @@ func updateSnapshotSettings(ctx context.Context, tx *sql.Tx, snapshot models.Clu
 		settingClauses = append(settingClauses, "threat_schedule_time=?")
 		settingArgs = append(settingArgs, *settings.ThreatScheduleTime)
 	}
+		// WAF 自动封禁设置组随 users 节落库（与自动备份同口径，指针缺席保留本地值；
+		// target_list_id 为节点本地自愈解析结果，永不在此写入）。
+		var wabClauses []string
+		var wabArgs []any
+		if settings.AutoBanEnabled != nil {
+			wabClauses = append(wabClauses, "auto_ban_enabled=?")
+			wabArgs = append(wabArgs, *settings.AutoBanEnabled)
+		}
+		if settings.AutoBanThreshold != nil {
+			wabClauses = append(wabClauses, "auto_ban_threshold=?")
+			wabArgs = append(wabArgs, *settings.AutoBanThreshold)
+		}
+		if settings.AutoBanWindowMinutes != nil {
+			wabClauses = append(wabClauses, "auto_ban_window_minutes=?")
+			wabArgs = append(wabArgs, *settings.AutoBanWindowMinutes)
+		}
+		if settings.AutoBanDurationHours != nil {
+			wabClauses = append(wabClauses, "auto_ban_duration_hours=?")
+			wabArgs = append(wabArgs, *settings.AutoBanDurationHours)
+		}
+		if settings.AutoBanScanEnabled != nil {
+			wabClauses = append(wabClauses, "auto_ban_scan_enabled=?")
+			wabArgs = append(wabArgs, *settings.AutoBanScanEnabled)
+		}
+		if settings.AutoBanScanThreshold != nil {
+			wabClauses = append(wabClauses, "auto_ban_scan_threshold=?")
+			wabArgs = append(wabArgs, *settings.AutoBanScanThreshold)
+		}
+		if len(wabClauses) > 0 {
+			if _, err := tx.ExecContext(ctx, `UPDATE global_config SET `+strings.Join(wabClauses, ",")+` WHERE id=1`, wabArgs...); err != nil {
+				return fmt.Errorf("写入快照自动封禁设置: %w", err)
+			}
+		}
+		// CC 防护封禁联动设置组随 users 节落库（与自动封禁同口径，指针缺席保留本地值）。
+		var ccClauses []string
+		var ccArgs []any
+		if settings.CCBanEnabled != nil {
+			ccClauses = append(ccClauses, "cc_ban_enabled=?")
+			ccArgs = append(ccArgs, *settings.CCBanEnabled)
+		}
+		if settings.CCBanThreshold != nil {
+			ccClauses = append(ccClauses, "cc_ban_threshold=?")
+			ccArgs = append(ccArgs, *settings.CCBanThreshold)
+		}
+		if settings.CCBanWindowMinutes != nil {
+			ccClauses = append(ccClauses, "cc_ban_window_minutes=?")
+			ccArgs = append(ccArgs, *settings.CCBanWindowMinutes)
+		}
+		if settings.CCBanDurationHours != nil {
+			ccClauses = append(ccClauses, "cc_ban_duration_hours=?")
+			ccArgs = append(ccArgs, *settings.CCBanDurationHours)
+		}
+		if len(ccClauses) > 0 {
+			if _, err := tx.ExecContext(ctx, `UPDATE global_config SET `+strings.Join(ccClauses, ",")+` WHERE id=1`, ccArgs...); err != nil {
+				return fmt.Errorf("写入快照 CC 封禁设置: %w", err)
+			}
+		}
+
 	if len(settingClauses) > 0 {
 		if _, err := tx.ExecContext(ctx, `UPDATE global_config SET `+strings.Join(settingClauses, ",")+` WHERE id=1`, settingArgs...); err != nil {
 			return fmt.Errorf("写入快照扩展设置: %w", err)

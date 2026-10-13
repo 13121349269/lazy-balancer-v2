@@ -78,6 +78,10 @@ var auditRoutePolicies = map[string]AuditPolicy{
 	"POST /api/v1/auto-backup/run":         AuditPolicyExplicit,
 	"DELETE /api/v1/auto-backup/:id":       AuditPolicyExplicit,
 	"POST /api/v1/auto-backup/:id/restore": AuditPolicyExplicit,
+	"PUT /api/v1/settings/auto-ban":    AuditPolicyExplicit,
+	"POST /api/v1/auto-ban/run":        AuditPolicyExplicit,
+	"PUT /api/v1/settings/cc-ban":      AuditPolicyExplicit,
+	"POST /api/v1/cc-ban/run":          AuditPolicyExplicit,
 	"POST /api/v1/config/preview":          AuditPolicySkip,
 	"POST /api/v1/config/import/validate":  AuditPolicySkip,
 	"PUT /api/v1/config":                   AuditPolicyExplicit,
@@ -180,6 +184,10 @@ var readOnlyWriteRoutes = map[string]struct{}{
 	// 等中间件（Gin 对 group 中间件链做注册期快照），该条目无任何运行时消费者；
 	// MCP 写控制实际由内部转发重入跳完整重跑只读/从节点/管理员守卫承担。
 	// R39-7(C3):OIDC 发现探测为读语义(完整 discovery+JWKS 可达性探测,失败
+	"PUT /api/v1/settings/auto-ban":  {},
+	"POST /api/v1/auto-ban/run":      {},
+	"PUT /api/v1/settings/cc-ban":    {},
+	"POST /api/v1/cc-ban/run":        {},
 	// 仅记审计不落库配置)——与上面 certificate-configs/ca-providers 测试探针
 	// 同口径(2026-09-10 裁定先例),只读 API Key 放行。
 	"POST /api/v1/settings/oidc/test": {},

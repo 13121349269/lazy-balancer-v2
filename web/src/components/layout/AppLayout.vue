@@ -55,6 +55,10 @@
             <el-icon><Warning /></el-icon>
             <template #title>事件日志</template>
           </el-menu-item>
+          <el-menu-item index="security-auto-ban" @click="goPage('security-auto-ban')">
+            <el-icon><Aim /></el-icon>
+            <template #title>自动封禁</template>
+          </el-menu-item>
         </el-sub-menu>
         <el-menu-item index="caddy" @click="goPage('caddy')">
           <el-icon><Cpu /></el-icon>
@@ -218,7 +222,7 @@ import { useAuthStore } from '@/stores/auth'
 import type { PageId } from '@/stores/auth'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import { ElMessageBox } from 'element-plus'
-import {Timer,  DataAnalysis, List, Setting, Cpu, User, Connection, Lock, Key, Document, Warning, Notebook } from '@element-plus/icons-vue'
+import {Timer,  DataAnalysis, List, Setting, Cpu, User, Connection, Lock, Key, Document, Warning, Notebook, Aim } from '@element-plus/icons-vue'
 import DialogHeader from '@/components/DialogHeader.vue'
 import AppLogo from '@/components/AppLogo.vue'
 import { appName, footerHtml } from '@/utils/branding'
@@ -260,6 +264,7 @@ const pageTitle: Record<string, string> = {
   'security-policies': '安全防护 / 安全策略',
   'security-rules': '安全防护 / 规则集',
   'security-block-pages': '安全防护 / 拦截页面',
+  'security-auto-ban': '安全防护 / 自动封禁',
 }
 
 const profileForm = ref({

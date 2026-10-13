@@ -468,6 +468,35 @@ func (s *ClusterService) loadSnapshotGlobalSettings(ctx context.Context, store s
 	snapshot.BasicSettings.AutoBackupDay = &abDay
 	snapshot.BasicSettings.AutoBackupKeep = &abKeep
 	snapshot.BasicSettings.AutoBackupSections = &abSections
+	// WAF 自动封禁设置随 users 节同步（与自动备份同口径）。target_list_id 为节点
+	// 本地自愈解析结果，不在此装载——列表行本体经 security_ip_lists 表同步。
+	var wabEnabled, wabScanEnabled bool
+	var wabThreshold, wabWindowMinutes, wabDurationHours, wabScanThreshold int
+	if err := store.QueryRowContext(ctx, `SELECT COALESCE(auto_ban_enabled,0), COALESCE(auto_ban_threshold,20),
+		COALESCE(auto_ban_window_minutes,10), COALESCE(auto_ban_duration_hours,24),
+		COALESCE(auto_ban_scan_enabled,1), COALESCE(auto_ban_scan_threshold,10)
+		FROM global_config WHERE id=1`).Scan(&wabEnabled, &wabThreshold, &wabWindowMinutes, &wabDurationHours, &wabScanEnabled, &wabScanThreshold); err != nil {
+		return fmt.Errorf("读取自动封禁设置: %w", err)
+	}
+	snapshot.BasicSettings.AutoBanEnabled = &wabEnabled
+	snapshot.BasicSettings.AutoBanThreshold = &wabThreshold
+	snapshot.BasicSettings.AutoBanWindowMinutes = &wabWindowMinutes
+	snapshot.BasicSettings.AutoBanDurationHours = &wabDurationHours
+	snapshot.BasicSettings.AutoBanScanEnabled = &wabScanEnabled
+	snapshot.BasicSettings.AutoBanScanThreshold = &wabScanThreshold
+
+	// CC 防护封禁联动（中优 #6）随同 users 节同步。
+	var ccEnabled bool
+	var ccThreshold, ccWindowMinutes, ccDurationHours int
+	if err := store.QueryRowContext(ctx, `SELECT COALESCE(cc_ban_enabled,0), COALESCE(cc_ban_threshold,10),
+		COALESCE(cc_ban_window_minutes,10), COALESCE(cc_ban_duration_hours,1)
+		FROM global_config WHERE id=1`).Scan(&ccEnabled, &ccThreshold, &ccWindowMinutes, &ccDurationHours); err != nil {
+		return fmt.Errorf("读取 CC 封禁设置: %w", err)
+	}
+	snapshot.BasicSettings.CCBanEnabled = &ccEnabled
+	snapshot.BasicSettings.CCBanThreshold = &ccThreshold
+	snapshot.BasicSettings.CCBanWindowMinutes = &ccWindowMinutes
+	snapshot.BasicSettings.CCBanDurationHours = &ccDurationHours
 	// L5-67-01（第 67 轮审计）：威胁库任务级排程三列随 users 节同步（镜像
 	// CL41-1 自动备份组：指针装载+COALESCE 兜底恒携带，升主即生效）。
 	var threatAuto bool
